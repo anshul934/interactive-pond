@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Serene WebGL Koi Pond Simulation</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Cinzel:wght@500;700&display=swap" rel="stylesheet">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js"
+      }
+    }
+  </script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+      margin: 0;
+      padding: 0;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #030a0f;
+      font-family: 'Outfit', sans-serif;
+    }
+    canvas#webglCanvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+    #pondForegroundCanvas {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .camera-feed {
+      position: fixed;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    .font-cinzel {
+      font-family: 'Cinzel', serif;
+    }
+    /* Custom Glassmorphism UI */
+    .glass-panel {
+      background: rgba(10, 25, 35, 0.65);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+    .glass-btn {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .glass-btn:hover {
+      background: rgba(255, 255, 255, 0.22);
+      border-color: rgba(255, 255, 255, 0.4);
+      transform: translateY(-2px);
+    }
+    .glass-btn.active {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.45), rgba(14, 165, 233, 0.25));
+      border-color: rgba(56, 189, 248, 0.7);
+      box-shadow: 0 0 20px rgba(56, 189, 248, 0.35);
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.1);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.25);
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body class="relative w-full h-full text-white">
+
+  <!-- Main WebGL Screen Canvas -->
+  <canvas id="webglCanvas"></canvas>
+  <canvas id="pondForegroundCanvas" aria-hidden="true"></canvas>
+  <video id="cameraVideo" class="camera-feed" aria-hidden="true" playsinline muted></video>
+
+  <!-- Top Header Overlay -->
+  <header class="absolute top-0 left-0 right-0 p-4 md:p-6 flex justify-end items-center z-20 pointer-events-none">
+    <!-- Right Quick Actions -->
+    <div class="pointer-events-auto flex items-center gap-2">
+      <button id="cameraToggleBtn" title="Enable camera input" aria-label="Enable camera input" class="glass-btn px-3 h-10 rounded-full flex items-center gap-2 text-slate-200 text-xs font-medium">
+        <i class="fa-solid fa-camera text-sm" id="cameraToggleIcon"></i>
+        <span class="hidden sm:inline">Camera</span>
+        <span id="cameraStatus" class="hidden md:inline text-[10px] text-slate-300">Camera off</span>
+      </button>
+      <button id="soundToggleBtn" title="Toggle Audio" class="glass-btn w-10 h-10 rounded-full flex items-center justify-center text-slate-200">
+        <i class="fa-solid fa-volume-xmark text-sm" id="soundIcon"></i>
+      </button>
+      <button id="menuToggleBtn" title="Pond Settings" class="glass-btn px-4 h-10 rounded-full flex items-center gap-2 text-slate-200 text-xs font-medium">
+        <i class="fa-solid fa-sliders text-sm"></i>
+        <span class="hidden sm:inline">Controls</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Floating Mode Selector (Right Toolbar) -->
+  <div class="absolute top-1/2 right-4 -translate-y-1/2 z-20 flex flex-col gap-3 glass-panel p-2 rounded-2xl">
+    <button data-mode="ripple" id="btnModeRipple" title="Ripples & Touch" class="glass-btn active w-11 h-11 rounded-xl flex items-center justify-center text-cyan-300">
+      <i class="fa-solid fa-hand-pointer text-base"></i>
+    </button>
+    <button data-mode="food" id="btnModeFood" title="Drop Food Pellets" class="glass-btn w-11 h-11 rounded-xl flex items-center justify-center text-amber-300">
+      <i class="fa-solid fa-cookie-bite text-base"></i>
+    </button>
+    <button data-mode="flower" id="btnModeFlower" title="Drop Sakura Petals" class="glass-btn w-11 h-11 rounded-xl flex items-center justify-center text-pink-300">
+      <i class="fa-solid fa-spa text-base"></i>
+    </button>
+    <button id="btnClearAll" title="Clear Floating Items" class="glass-btn w-11 h-11 rounded-xl flex items-center justify-center text-rose-300">
+      <i class="fa-solid fa-rotate-left text-base"></i>
+    </button>
+  </div>
+
+  <!-- Settings Drawer Panel -->
+  <aside id="settingsDrawer" class="fixed top-0 right-0 h-full w-80 max-w-[85vw] glass-panel z-30 p-6 flex flex-col gap-6 translate-x-full transition-transform duration-300 ease-out border-l border-white/10">
+    <div class="flex justify-between items-center border-b border-white/10 pb-4">
+      <div class="flex items-center gap-2">
+        <i class="fa-solid fa-sliders text-cyan-400"></i>
+        <h2 class="font-cinzel font-bold text-lg text-white">Pond Shader Settings</h2>
+      </div>
+      <button id="closeSettingsBtn" class="text-slate-400 hover:text-white transition-colors">
+        <i class="fa-solid fa-xmark text-lg"></i>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto space-y-6 pr-1">
+      <!-- Theme Selection -->
+      <div>
+        <label class="block text-xs font-semibold uppercase tracking-wider text-cyan-300 mb-2.5">Atmosphere Theme</label>
+        <div class="grid grid-cols-2 gap-2" id="themeButtons">
+          <button data-theme="day" class="glass-btn py-2 px-3 rounded-lg text-xs font-medium text-left flex items-center gap-2 active">
+            <span class="w-3 h-3 rounded-full bg-sky-400"></span> Daylight
+          </button>
+          <button data-theme="twilight" class="glass-btn py-2 px-3 rounded-lg text-xs font-medium text-left flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-purple-400"></span> Twilight
+          </button>
+          <button data-theme="night" class="glass-btn py-2 px-3 rounded-lg text-xs font-medium text-left flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-indigo-500"></span> Midnight
+          </button>
+          <button data-theme="moss" class="glass-btn py-2 px-3 rounded-lg text-xs font-medium text-left flex items-center gap-2">
+            <span class="w-3 h-3 rounded-full bg-emerald-500"></span> Zen Moss
+          </button>
+        </div>
+      </div>
+
+      <!-- Water Flow Speed -->
+      <div>
+        <div class="flex justify-between text-xs font-semibold mb-1">
+          <span class="text-cyan-300 uppercase tracking-wider">Water Current Drift</span>
+          <span id="flowSpeedVal" class="text-white">0.5x</span>
+        </div>
+        <input type="range" id="flowSpeedSlider" min="0" max="2.5" step="0.25" value="0.5" class="w-full h-1.5 bg-slate-700/60 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+      </div>
+
+      <!-- Reflection & Specular Intensity -->
+      <div>
+        <div class="flex justify-between text-xs font-semibold mb-1">
+          <span class="text-cyan-300 uppercase tracking-wider">Wave Specular Glints</span>
+          <span id="reflectionVal" class="text-white">1.0x</span>
+        </div>
+        <input type="range" id="reflectionSlider" min="0.2" max="2.0" step="0.1" value="1.0" class="w-full h-1.5 bg-slate-700/60 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+      </div>
+
+      <!-- Koi Population Slider -->
+      <div>
+        <div class="flex justify-between text-xs font-semibold mb-1">
+          <span class="text-cyan-300 uppercase tracking-wider">Koi Count</span>
+          <span id="fishCountVal" class="text-white">14</span>
+        </div>
+        <input type="range" id="fishCountSlider" min="4" max="30" value="14" class="w-full h-1.5 bg-slate-700/60 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+      </div>
+
+      <!-- Ripple Force -->
+      <div>
+        <div class="flex justify-between text-xs font-semibold mb-1">
+          <span class="text-cyan-300 uppercase tracking-wider">Touch Wave Force</span>
+          <span id="rippleForceVal" class="text-white">0.3x</span>
+        </div>
+        <input type="range" id="rippleForceSlider" min="0.1" max="1.6" step="0.1" value="0.3" class="w-full h-1.5 bg-slate-700/60 rounded-lg appearance-none cursor-pointer accent-cyan-400">
+      </div>
+
+      <!-- Feature Toggles -->
+      <div class="space-y-3 pt-2 border-t border-white/10">
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="text-xs font-medium text-slate-200">Dynamic Underwater Caustics</span>
+          <input type="checkbox" id="chkCaustics" checked class="w-4 h-4 rounded accent-cyan-400 cursor-pointer">
+        </label>
+        <label class="flex items-center justify-between cursor-pointer">
+          <span class="text-xs font-medium text-slate-200">Drifting Water Lilies</span>
+          <input type="checkbox" id="chkLilies" checked class="w-4 h-4 rounded accent-cyan-400 cursor-pointer">
+        </label>
+      </div>
+    </div>
+
+    <div class="text-center text-[10px] text-slate-400 border-t border-white/10 pt-3">
+      Ultra-Fluid WebGL Physics • Screen-Space Vectors
+    </div>
+  </aside>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
