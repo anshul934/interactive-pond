@@ -1,137 +1,39 @@
-# SERENE WEBGL KOI POND
+## Day 1:
+ ## Plan: Create an interactive water body with fishes and possibely multiple other creatures, that interact with the user's hand through camera tracking.
 
-## Changelog
+ ## Implementation:
+ *Initial set up: created a top down view of a pond using HTML and JavaScript rendering for the water ripple effect, using a screen grid.
+ *added simple koi fish that wander around aimlessly and interact with the cursor(swim away when cursor moved swiftly and interact when cursor still for a while)
+ *added few details to ponds like stones, lily pads, options to drop food to the koi, drop some petals into the pond, provide option to change the atmosphere theme and some light effects on the floor.
 
-All significant features, fixes, and structural changes, in order. Each entry
-is an update.
+ ## changes:
+ *improved the water effects like ripples by changing the implementation from Screen grid to WebGL wave calculations.
+ *improved fish movements to seem more natural by making the fish multi jointed to let them bend as they move.
+ *split the code into multiple files to keep the code base modular and re-usable. Split the code file into separate input handling files and simulation files.
+ *used Living World project's camera input code file to integrate into this implementation, to help with taking input from camera using hand tracking and gesture detection like pinching to click. kept the code files modular.
+ *updated the camera module to fix some bugs and increase number of hands detected
+ *fixed hand input bug
+ *added frog animation into the simulation to move around and jump onto the Lily pads. Kept the frogs as NPCs for now to help with debugging.
+ *fixed bug with Lily pads being placed on top of one another sometimes randomly.
+ *changed resize behaviour from generating lily pads and pond floor pebbles each time the window is resized, to stay constant even after resizing.
 
----
+## Day 2:
+ ## Plan: test the environment thoroughly for bugs and fix if any found. Research unique implementations of new tech.
 
-## Update 1 — Modular Pond Application
+ ## Implementation:
+ *Commented out uneccessary underwater graphics, except the fish.
+ *Found a bug which the fish's fleeing state when the disturbance changes direction repeatedly. Fixed fleeing fish behavior so they turn away from a moving pursuer without restarting their flee timer.
 
-* Split the original standalone pond page into ES modules for the app entry
-  point, pond simulation, pointer/touch input, camera input, shared input
-  management, and frog NPC behavior.
-* Added a shared input interface so the simulation can respond to input without
-  depending on whether it came from a pointer or a camera.
-* Kept the HTML page as the application shell for the canvases, controls, and
-  module entry point.
-* Added a README covering the module layout and local run requirements.
-
-## Update 2 — Camera Input and Module Loading
-
-* Added a camera control and MediaPipe Hand Landmarker input, with index-finger
-  movement and pinch actions.
-* Load the local camera adapter through the static module graph instead of
-  fetching it dynamically when the camera button is clicked. This avoids a
-  button-time request for the local `CameraInput.js` module.
-* Added camera lifecycle and error handling, GPU-to-CPU delegate fallback,
-  alternate MediaPipe JavaScript/WASM sources, and lazy loading of the tracking
-  runtime when camera input is enabled.
-* Documented that camera access requires `localhost` or HTTPS, camera
-  permission, and access to the tracking assets.
-
-## Update 3 — Camera Smoothing and Stationary Visitors
-
-* Added filtered hand positions and rejection of brief tracking jumps.
-* Added a per-hand movement deadband so small camera jitter does not continually
-  reset stationary-hand behavior.
-* Retained hand positions while tracking briefly drops, and added stable hand
-  IDs, pinch hysteresis, and gesture stabilization.
-
-## Update 4 — Frog NPCs
-
-* Added non-interactive frogs that enter the pond, swim to lily pads, hop onto
-  and perch on them, return to the water, and swim out.
-* Added simple frog animation, corrected frog facing/orientation, and refined
-  the swimming motion so both hind legs pump together.
-* Added small ripples where frogs enter and leave the water.
-
-## Update 5 — Foreground Pond Elements and Interface Cleanup
-
-* Added a transparent foreground canvas above the water shader for lily pads
-  and frogs, preventing water refraction from appearing over the pads.
-* Removed the top-left title/branding panel and bottom koi status badge.
-* Preserved frog and lily rendering independently of the underwater canvas.
-
-## Update 6 — Water, Ripple, and Palette Tuning
-
-* Reduced the default water current drift and touch-wave force and synchronized
-  their initial values with the controls.
-* Made interactive ripples gentler, narrower, shorter-lived, and slower to
-  expand.
-* Reduced underwater caustic brightness and size and adjusted water reflection
-  blending to retain more color depth.
-* Tuned the daylight water and pebble colors toward a subtly richer teal, and
-  adjusted the lily pad greens to remain muted but readable.
-
-## Update 7 — Lily Pad Placement
-
-* Added bounded retry placement for lily pads, with a minimum spacing check
-  based on both pads' radii.
-* Skip a pad if no non-overlapping position can be found after the retry
-  limit, rather than placing it on top of another pad.
-
-## Update 8 — Koi Food Priority and Visitor Behavior
-
-* Added stationary visitor-hand approaches and nibbling, assigning each nearby
-  koi to the closest eligible visitor.
-* Made uneaten food take priority: koi do not leave available food to approach
-  a visitor, and visitor attraction is enabled after all food pellets are
-  eaten.
-* Removed the per-visitor fish limit; every koi within the approach radius can
-  be assigned to an idle visitor, with each fish assigned to at most one
-  visitor at a time.
-
-## Update 9 — Multi-Hand Camera Interaction
-
-* Set MediaPipe to track at most four hands and preserve each tracked hand as a
-  separate visitor target.
-* Carry per-hand position, movement, stationary detection, and pinch actions
-  through the input manager rather than collapsing camera input to one primary
-  cursor.
-* Process pond movement effects and pinch actions independently for every
-  active hand.
-* Display the current number of detected hands in the camera status.
-* Lowered hand-detection confidence and relaxed duplicate-detection filtering
-  to reduce missed hands and avoid merging nearby detections.
-
-## Update 10 — Frame-Rate-Independent Fish Movement
-
-* Scale koi movement, turning, swim animation, and behavior timers by elapsed
-  time so slower animation frames do not make fish appear to swim in slow
-  motion.
-* Throttle hand-tracking inference to approximately 30 frames per second to
-  reduce its impact on pond rendering.
-
-## Update 11 — Local Node Server
-
-* Added `serve.mjs`, a dependency-free Node.js static server for running the
-  module-based app from `localhost`.
-* Serve JavaScript modules and WebAssembly assets with appropriate MIME types,
-  and return explicit not-found responses for missing files.
-* Documented the PowerShell startup command, browser URL, port override, and
-  how to stop the server. The server prints the app URL but does not open a
-  browser automatically.
-
-## Update 12 — Stable Decorations on Resize
-
-* Preserve the existing lily pads and pebble layout when the browser viewport
-  is resized, scaling their positions to fit the new dimensions instead of
-  generating a new random arrangement.
-* Recolor the existing pebbles when the atmosphere theme changes without
-  changing their positions or individual color assignments.
-
----
-
-## Current Status
-
-* Active app: modular Three.js koi pond with Canvas 2D underwater and
-  foreground rendering.
-* Input: pointer/touch or camera hand tracking, with up to four independently
-  processed camera hands.
-* Koi: eat available food before approaching nearby stationary hands; all
-  nearby koi may approach after food is gone.
-* Ambient NPCs: frogs swim, perch on lilies, and return to the water with small
-  splash ripples.
-* Local run: `node .\serve.mjs`, then open the printed local pond URL.
+ ## Changes:
+ *the food pellet logic was commented out, brought that back to functionality.
+ *fixed a camera hand-detection bug caused by an undefined normalized-landmarks variable, which made the tracker clear detected hands when processing them.
+ *passed mirrored hand landmarks through the camera input and into the underwater renderer, and retained them during brief tracking dropouts.
+ *added hand-shadow rendering on the pond floor using detected landmarks, with a fallback silhouette when landmarks are unavailable.
+  *added hand dipping detection based on palm size, with a warm-up period and separate enter/exit thresholds to make detection more stable.
+ *improved water response to dipping hands by adding ripples on entry, water droplets and ripples on withdrawal, and gentle ripples while the hand is submerged.
+ *made the hand shadow transition between a soft, offset hover shadow and a closer, darker submerged shadow.
+ *replaced the skeletal hand shadow with a smooth, filled hand silhouette.
+ *spread fish visitor targets across different points on the hand, so fish no longer gather only at the index fingertip.
+ *changed fish behavior so they hover beneath a hand above the water and nibble only when the hand is dipped and still.
+ *made camera-hand movement track the palm with a larger movement threshold, allowing small natural movements without resetting the fish's stillness behavior.
+ *enabled moving camera hands to startle nearby fish and trigger fleeing.
