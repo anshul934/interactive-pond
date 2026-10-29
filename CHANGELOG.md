@@ -51,3 +51,9 @@
  
  ## Changes:
  *found  and fixed a bug causing foreground to render twice, masking a hand marker being rendered.
+ *Added a splash animation to visualize kicking across the pond to splash water around
+ *Improved splash animation to splash in direction of moving disturbance.
+ *Improved splash animation to only splash drops out of the water when moving fast, else only ripples.
+
+## Day 4:
+ ## plan: Fix frog and lily animation states and convert code base modularity to export JSON files of system states through websockets to Unreal engine to outsource the animations rendering.

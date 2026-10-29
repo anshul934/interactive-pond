@@ -95,6 +95,11 @@ export function createPondSimulation(THREE, input) {
       const MAX_RIPPLES = 32;
       const rippleData = new Float32Array(MAX_RIPPLES * 4); // x, y, age, intensity
       let activeRippleCount = 0;
+      const MAX_SPLASH_WAVES = 8;
+      const SPLASH_WAVE_LIFE = 2.6;
+      const splashWaveData = new Float32Array(MAX_SPLASH_WAVES * 4); // x, y, age, intensity
+      const splashDirData = new Float32Array(MAX_SPLASH_WAVES * 4);  // dirX, dirY, 0, 0
+      let splashWaves = [];
 
       const waterVertexShader = `
         varying vec2 vUv;
@@ -114,6 +119,8 @@ export function createPondSimulation(THREE, input) {
         uniform float uFlowSpeed;
         uniform float uReflectionIntensity;
         uniform vec4 uRipples[32];
+        uniform vec4 uSplashWaves[8];
+        uniform vec4 uSplashDirs[8];
         uniform vec3 uWaterBase;
         uniform vec3 uWaterDeep;
         uniform vec3 uSkyColor;
@@ -155,6 +162,38 @@ export function createPondSimulation(THREE, input) {
             if (d < waveWidth * 2.5) {
               float ring = exp(-2.0 * d * d / (waveWidth * waveWidth));
               h += sin((dist - waveRadius) * 45.0) * intensity * 0.006 * ring * temporalDamp * spatialDamp;
+            }
+          }
+          
+          // Directional splash waves: an egg-shaped ring pushed ahead of the movement
+          for (int i = 0; i < 8; i++) {
+            vec4 sw = uSplashWaves[i];
+            float sAge = sw.z;
+            if (sAge <= 0.0 || sAge > 2.6) continue;
+
+            vec2 dir = uSplashDirs[i].xy;
+            vec2 rel = pos - sw.xy;
+            float relLen = length(rel);
+            float along = dot(rel, dir);
+            float across = dot(rel, vec2(-dir.y, dir.x));
+
+            // Forward distance is compressed (wave reaches further ahead),
+            // backward distance is stretched (wave barely goes behind)
+            float squash = along > 0.0 ? 0.62 : 1.7;
+            float sDist = length(vec2(along * squash, across));
+
+            float sRadius = sAge * 0.30;
+            float sD = abs(sDist - sRadius);
+            float sWidth = 0.03;
+
+            float facing = relLen > 0.0001 ? along / relLen : 1.0;
+            float directional = mix(0.3, 1.0, facing * 0.5 + 0.5);
+            float sTemporal = exp(-sAge * 1.3);
+            float sSpatial = exp(-sDist * 2.0);
+
+            if (sD < sWidth * 2.5) {
+              float sRing = exp(-2.0 * sD * sD / (sWidth * sWidth));
+              h += sin((sDist - sRadius) * 38.0) * sw.w * 0.008 * sRing * directional * sTemporal * sSpatial;
             }
           }
           return h;
@@ -210,6 +249,8 @@ export function createPondSimulation(THREE, input) {
         uFlowSpeed: { value: config.flowSpeed },
         uReflectionIntensity: { value: config.reflectionIntensity },
         uRipples: { value: rippleData },
+        uSplashWaves: { value: splashWaveData },
+        uSplashDirs: { value: splashDirData },
         uWaterBase: { value: themes.day.waterBase },
         uWaterDeep: { value: themes.day.waterDeep },
         uSkyColor: { value: themes.day.skyColor }
@@ -293,9 +334,14 @@ export function createPondSimulation(THREE, input) {
 
         droplets.forEach(d => {
           d.x += d.vx * dt;
+          d.y += (d.vy ?? 0) * dt;       // splash droplets also travel in y
           d.h += d.vh * dt;
           d.vh -= 650 * dt;
-          if (d.h < 0) { d.landed = true; emitRipple(d.x, d.y, 0.35); }
+          if (d.h < 0) {
+            d.landed = true;
+            // Hand-removal droplets have no `ripple` field, so they still always ripple
+            if (d.ripple ?? true) emitRipple(d.x, d.y, d.rippleIntensity ?? 0.35);
+          }
         });
         droplets = droplets.filter(d => !d.landed);
       }
@@ -317,6 +363,70 @@ export function createPondSimulation(THREE, input) {
         }
       }
 
+      // ---- Splash tuning ----
+      const SPLASH_MIN_SPEED = 800;       // px/s below this: ripples only, no splash
+      const SPLASH_FULL_SPEED = 2600;     // px/s at which the splash is at full strength
+      const SPLASH_COOLDOWN = 0.06;       // seconds between droplet bursts per visitor
+      const SPLASH_WAVE_COOLDOWN = 0.2;   // seconds between directional waves per visitor
+      const SPLASH_MAX_DROPLETS = 500;
+      const SPLASH_RIPPLE_CHANCE = 0.12;  // fraction of droplets that ripple on landing
+
+      function splashLevel(speed) {
+        return Math.max(0, Math.min((speed - SPLASH_MIN_SPEED) / (SPLASH_FULL_SPEED - SPLASH_MIN_SPEED), 1));
+      }
+
+      // Droplets from several points (the whole hand, not just the index tip)
+      function emitSplash(points, speed, dirX = 0, dirY = 0, power = 1) {
+        const level = splashLevel(speed);
+        const strength = (0.4 + 1.6 * level) * power;
+        const total = 6 + 24 * level * power;
+        const perPoint = Math.max(1, Math.round(total / points.length));
+        const hasDir = Math.hypot(dirX, dirY) > 1;
+        const heading = hasDir ? Math.atan2(dirY, dirX) : 0;
+
+        points.forEach(p => {
+          for (let i = 0; i < perPoint; i++) {
+            // Moving: spray forward in a cone. Stationary: spray outward in a ring.
+            const angle = hasDir
+              ? heading + (Math.random() - 0.5) * 1.6
+              : Math.random() * Math.PI * 2;
+            const v = (60 + Math.random() * 180) * (0.5 + strength * 0.6);
+
+            droplets.push({
+              x: p.x + (Math.random() - 0.5) * 10,
+              y: p.y + (Math.random() - 0.5) * 10,
+              vx: Math.cos(angle) * v,
+              vy: Math.sin(angle) * v,
+              h: 2 + Math.random() * 6,
+              vh: (90 + Math.random() * 160) * (0.6 + strength * 0.4),
+              r: 1.2 + Math.random() * 1.6 * (0.7 + strength * 0.3),
+              ripple: Math.random() < SPLASH_RIPPLE_CHANCE,
+              rippleIntensity: 0.25
+            });
+          }
+        });
+
+        if (droplets.length > SPLASH_MAX_DROPLETS) {
+          droplets.splice(0, droplets.length - SPLASH_MAX_DROPLETS);
+        }
+      }
+
+      // A small wave that travels in the direction of the disturbance
+      function emitSplashWave(px, py, dirX, dirY, intensity) {
+        const len = Math.hypot(dirX, dirY);
+        if (len < 0.001) return;
+        const aspect = window.innerWidth / window.innerHeight;
+        splashWaves.push({
+          x: (px / window.innerWidth - 0.5) * aspect,
+          y: 0.5 - py / window.innerHeight,
+          dx: dirX / len,
+          dy: -dirY / len,            // screen y points down, shader y points up
+          age: 0,
+          intensity: intensity * config.rippleForceMultiplier
+        });
+        if (splashWaves.length > MAX_SPLASH_WAVES) splashWaves.shift();
+      }
+
       function updateRipples(dt) {
         // Update ages and sync Float32Array uniform
         for (let i = 0; i < MAX_RIPPLES; i++) {
@@ -333,37 +443,84 @@ export function createPondSimulation(THREE, input) {
         }
         // Clean up expired ripples
         activeRipplesList = activeRipplesList.filter(r => r.age <= 3.5);
+        // Directional splash waves
+        for (let i = 0; i < MAX_SPLASH_WAVES; i++) {
+          if (i < splashWaves.length) {
+            const w = splashWaves[i];
+            w.age += dt;
+            splashWaveData[i * 4 + 0] = w.x;
+            splashWaveData[i * 4 + 1] = w.y;
+            splashWaveData[i * 4 + 2] = w.age;
+            splashWaveData[i * 4 + 3] = w.intensity;
+            splashDirData[i * 4 + 0] = w.dx;
+            splashDirData[i * 4 + 1] = w.dy;
+          } else {
+            splashWaveData[i * 4 + 2] = -1.0;
+          }
+        }
+        splashWaves = splashWaves.filter(w => w.age <= SPLASH_WAVE_LIFE);
       }
 
-      function handleVisitorMove(visitor) {
-        const previous = visitorMotionStates.get(visitor.id);
-        const distance = previous
-          ? Math.hypot(visitor.x - previous.x, visitor.y - previous.y)
-          : 0;
-        const speed = Math.max(visitor.speed, distance);
-        visitorMotionStates.set(visitor.id, { x: visitor.x, y: visitor.y });
+      function handleVisitorMove(visitor, dt) {
+      const previous = visitorMotionStates.get(visitor.id);
+      const dx = previous ? visitor.x - previous.x : 0;
+      const dy = previous ? visitor.y - previous.y : 0;
+      const distance = Math.hypot(dx, dy);
+      const speed = Math.max(visitor.speed, distance);   // still drives ripples/startle
 
-        const hasHandLandmarks = visitor.landmarks?.length >= 21;
-        const wasDipped = visitorDipStates.get(visitor.id) ?? false;
-        visitorDipStates.set(visitor.id, Boolean(visitor.dipped));
+      // Real velocity in px/s, smoothed so 30fps camera updates don't flicker
+      const safeDt = Math.max(dt, 0.001);
+      const blend = Math.min(1, dt * 12);
+      const vx = previous ? previous.vx + (dx / safeDt - previous.vx) * blend : 0;
+      const vy = previous ? previous.vy + (dy / safeDt - previous.vy) * blend : 0;
+      const velocity = Math.hypot(vx, vy);
+      const nowSec = performance.now() / 1000;
+      const state = {
+        x: visitor.x,
+        y: visitor.y,
+        vx,
+        vy,
+        lastSplash: previous?.lastSplash ?? 0,
+        lastWave: previous?.lastWave ?? 0
+      };
+      visitorMotionStates.set(visitor.id, state);
 
-        if (hasHandLandmarks && visitor.dipped && visitor.moved && speed > 1.5) {
-          emitHandOutlineRipples(visitor, Math.min(speed * 0.08, 1.2));
-        } else if (!hasHandLandmarks && visitor.moved && speed > 1.5) {
-          emitRipple(visitor.x, visitor.y, Math.min(speed * 0.08, 1.2));
-        }
+      const hasHandLandmarks = visitor.landmarks?.length >= 21;
+      visitorDipStates.set(visitor.id, Boolean(visitor.dipped));
 
-        if (!visitor.moved) return;
+      // Splash only on fast movement, from the whole hand, plus a directional wave
+      const touchingWater = !hasHandLandmarks || visitor.dipped;
+      if (touchingWater && velocity > SPLASH_MIN_SPEED && nowSec - state.lastSplash > SPLASH_COOLDOWN) {
+        state.lastSplash = nowSec;
+        const points = getVisitorFishSpots(visitor);
+        emitSplash(points, velocity, vx, vy);
 
-        if (speed > 24) {
-          triggerStartle(visitor.x, visitor.y, !hasHandLandmarks);
-          playWaterSound('splash', 0.25);
+        if (nowSec - state.lastWave > SPLASH_WAVE_COOLDOWN) {
+          state.lastWave = nowSec;
+          const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
+          const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+          emitSplashWave(cx, cy, vx, vy, 1.5 + 2.0 * splashLevel(velocity));
         }
       }
+
+      if (hasHandLandmarks && visitor.dipped && visitor.moved && speed > 1.5) {
+        emitHandOutlineRipples(visitor, Math.min(speed * 0.08, 1.2));
+      } else if (!hasHandLandmarks && visitor.moved && speed > 1.5) {
+        emitRipple(visitor.x, visitor.y, Math.min(speed * 0.08, 1.2));
+      }
+
+      if (!visitor.moved) return;
+
+      if (speed > 24) {
+        triggerStartle(visitor.x, visitor.y, !hasHandLandmarks);
+        playWaterSound('splash', 0.25);
+      }
+    }
 
       function handlePointerAction(px, py) {
         if (config.interactionMode === 'ripple') {
           emitRipple(px, py, 2.2);
+          emitSplash([{ x: px, y: py }], 1800, 0, 0, 1.2);
           playWaterSound('plop', 0.4);
         } else if (config.interactionMode === 'food') {
           dropFoodPellet(px, py);
@@ -1397,7 +1554,7 @@ export function createPondSimulation(THREE, input) {
         updateVisitorIdleDetection(visitorInputs, dt);
         assignVisitorTargets();
         visitorInputs.forEach(visitor => {
-          handleVisitorMove(visitor);
+          handleVisitorMove(visitor, dt);
           if (visitor.action) handlePointerAction(visitor.x, visitor.y);
         });
         updateHandVisuals(visitorInputs, dt);
