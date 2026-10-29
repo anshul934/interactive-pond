@@ -37,3 +37,10 @@
  *changed fish behavior so they hover beneath a hand above the water and nibble only when the hand is dipped and still.
  *made camera-hand movement track the palm with a larger movement threshold, allowing small natural movements without resetting the fish's stillness behavior.
  *enabled moving camera hands to startle nearby fish and trigger fleeing.
+ *removed redundant UI buttons like petal buttons and clear petals button
+ *added a mini camera preview at bottom corner of screen which appears when the camera is turned on
+ *fixed bug where frogs would still jump onto nothing when the lily pads were removed while the frogs were still going towards the lily pads.
+ *added a splash effect after a lily pad is removed while a frog is still sitting on it.
+
+## Day 3:
+ ## Plan: fix bugs with frog behaviour and add features to make lily pads feel real instead of static.

@@ -23,7 +23,7 @@ export class FrogNpc {
 
   update(dt, width, height, lilyPads, enabled) {
     this.bobPhase += dt * 4;
-    if (this.state === "swimmingIn" || this.state === "swimmingOut") {
+    if (this.state === "swimmingIn" || this.state === "swimmingOut" || this.state === "leaving") {
       this.swimPhase += dt * 12;
     }
 
@@ -90,6 +90,21 @@ export class FrogNpc {
         this.waitTimer = 4 + Math.random() * 11;
       }
     }
+
+    if (this.state === "leaving") {
+      this.x += Math.cos(this.angle) * 90 * dt;
+      this.y += Math.sin(this.angle) * 90 * dt;
+
+      if (
+        this.x < -45 ||
+        this.x > width + 45 ||
+        this.y < -45 ||
+        this.y > height + 45
+      ) {
+        this.state = "waiting";
+        this.waitTimer = 4 + Math.random() * 11;
+      }
+    }
   }
 
   enter(width, height, lilyPads) {
@@ -100,6 +115,33 @@ export class FrogNpc {
     this.state = "swimmingIn";
   }
 
+  disableLilyPads() {
+    if (this.state === "perching" && this.targetPad) {
+      const pad = this.targetPad;
+      this.exitSide = Math.cos(this.angle) < 0 ? -1 : 1;
+
+      this.beginHop(
+        { x: this.x, y: this.y },
+        {
+          x: this.x + this.exitSide * pad.radius * 0.55,
+          y: this.y + pad.radius * 0.45
+        },
+        "swimmingOut",
+        0.8,
+        true
+      );
+
+      this.hopDuration = 0.3;
+      this.targetPad = null;
+      return;
+    }
+
+    if (this.state === "swimmingIn" || this.state === "hoppingToPad") {
+      this.targetPad = null;
+      this.state = "leaving";
+    }
+  }
+
   moveTowards(dx, dy, speed, dt) {
     const distance = Math.hypot(dx, dy);
     if (distance === 0) return;
@@ -108,16 +150,24 @@ export class FrogNpc {
     this.y += (dy / distance) * step;
   }
 
-  beginHop(from, to, nextState) {
+  beginHop(from, to, nextState, rippleIntensity = 0.18, rippleOnLanding = false) {
     this.hopStart = from;
     this.hopEnd = to;
     this.hopTime = 0;
     this.hopDuration = 0.45 + Math.random() * 0.2;
-    if (nextState === "perching") {
-      this.waterRippleEvents.push({ x: from.x, y: from.y });
-    } else {
-      this.waterRippleEvents.push({ x: to.x, y: to.y });
+    this.landingRipple = rippleOnLanding
+      ? { x: to.x, y: to.y, intensity: rippleIntensity }
+      : null;
+
+    if (!rippleOnLanding) {
+      const ripplePosition = nextState === "perching" ? from : to;
+      this.waterRippleEvents.push({
+        x: ripplePosition.x,
+        y: ripplePosition.y,
+        intensity: rippleIntensity
+      });
     }
+
     this.state = nextState === "perching" ? "hoppingToPad" : "hoppingToWater";
   }
 
@@ -141,6 +191,10 @@ export class FrogNpc {
 
     this.x = this.hopEnd.x;
     this.y = this.hopEnd.y;
+    if (this.landingRipple) {
+      this.waterRippleEvents.push(this.landingRipple);
+      this.landingRipple = null;
+    }
     if (this.state === "hoppingToPad") {
       this.state = "perching";
       this.waitTimer = 2 + Math.random() * 5;

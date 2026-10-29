@@ -130,6 +130,7 @@ export class CameraInput {
       this.video.playsInline = true;
 
       await this.video.play();
+      this.video.parentElement?.classList.add("is-active");
 
       if (this.video.videoWidth === 0) {
         await new Promise((resolve, reject) => {
@@ -223,6 +224,7 @@ export class CameraInput {
     }
     this.video.pause();
     this.video.srcObject = null;
+    this.video.parentElement?.classList.remove("is-active");
     this.cameraVisitors = [];
     this.handStates.clear();
     this.pinchStartedIds.clear();

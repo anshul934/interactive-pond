@@ -50,12 +50,43 @@
       height: 100%;
       pointer-events: none;
     }
-    .camera-feed {
+    .camera-preview {
       position: fixed;
-      width: 1px;
-      height: 1px;
-      opacity: 0;
+      right: 1rem;
+      bottom: 1rem;
+      z-index: 25;
+      display: none;
+      width: clamp(132px, 18vw, 220px);
+      aspect-ratio: 4 / 3;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 14px;
+      background: rgba(3, 10, 15, 0.9);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    }
+    .camera-preview.is-active { display: block; }
+    .camera-preview video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+    .camera-preview-label {
+      position: absolute;
+      left: 8px;
+      bottom: 7px;
+      padding: 3px 6px;
+      border-radius: 5px;
+      background: rgba(0, 0, 0, 0.58);
+      color: rgba(255, 255, 255, 0.9);
+      font-size: 9px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
       pointer-events: none;
+    }
+    @media (max-width: 640px) {
+      .camera-preview { right: 0.65rem; bottom: 0.65rem; width: 124px; }
     }
     .font-cinzel {
       font-family: 'Cinzel', serif;
@@ -101,7 +132,10 @@
   <!-- Main WebGL Screen Canvas -->
   <canvas id="webglCanvas"></canvas>
   <canvas id="pondForegroundCanvas" aria-hidden="true"></canvas>
-  <video id="cameraVideo" class="camera-feed" aria-hidden="true" playsinline muted></video>
+  <div id="cameraPreview" class="camera-preview" aria-label="Camera preview">
+    <video id="cameraVideo" aria-hidden="true" playsinline muted></video>
+    <span class="camera-preview-label">Camera preview</span>
+  </div>
 
   <!-- Top Header Overlay -->
   <header class="absolute top-0 left-0 right-0 p-4 md:p-6 flex justify-end items-center z-20 pointer-events-none">
@@ -129,12 +163,6 @@
     </button>
     <button data-mode="food" id="btnModeFood" title="Drop Food Pellets" class="glass-btn w-11 h-11 rounded-xl flex items-center justify-center text-amber-300">
       <i class="fa-solid fa-cookie-bite text-base"></i>
-    </button>
-    <button data-mode="flower" id="btnModeFlower" title="Drop Sakura Petals" class="glass-btn w-11 h-11 rounded-xl flex items-center justify-center text-pink-300">
-      <i class="fa-solid fa-spa text-base"></i>
-    </button>
-    <button id="btnClearAll" title="Clear Floating Items" class="glass-btn w-11 h-11 rounded-xl flex items-center justify-center text-rose-300">
-      <i class="fa-solid fa-rotate-left text-base"></i>
     </button>
   </div>
 
@@ -208,10 +236,6 @@
 
       <!-- Feature Toggles -->
       <div class="space-y-3 pt-2 border-t border-white/10">
-        <label class="flex items-center justify-between cursor-pointer">
-          <span class="text-xs font-medium text-slate-200">Dynamic Underwater Caustics</span>
-          <input type="checkbox" id="chkCaustics" checked class="w-4 h-4 rounded accent-cyan-400 cursor-pointer">
-        </label>
         <label class="flex items-center justify-between cursor-pointer">
           <span class="text-xs font-medium text-slate-200">Drifting Water Lilies</span>
           <input type="checkbox" id="chkLilies" checked class="w-4 h-4 rounded accent-cyan-400 cursor-pointer">

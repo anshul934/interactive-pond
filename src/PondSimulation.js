@@ -10,9 +10,8 @@ export function createPondSimulation(THREE, input) {
         reflectionIntensity: 1.0,
         fishCount: 14,
         rippleForceMultiplier: 0.3,
-        enableCaustics: true,
         enableLilies: true,
-        interactionMode: 'ripple', // ripple, food, flower
+        interactionMode: 'ripple', // ripple or food
         soundEnabled: false
       };
 
@@ -369,8 +368,6 @@ export function createPondSimulation(THREE, input) {
         } else if (config.interactionMode === 'food') {
           dropFoodPellet(px, py);
           playWaterSound('plop', 0.3);
-        } else if (config.interactionMode === 'flower') {
-          dropFlowerPetal(px, py);
           playWaterSound('plop', 0.2);
         }
       }
@@ -498,7 +495,6 @@ export function createPondSimulation(THREE, input) {
       // 5. FLOATING ITEMS (FOOD & SAKURA PETALS)
       // --------------------------------------------------------------------
       let foodPellets = [];
-      let sakuraPetals = [];
       let lilyPads = [];
       const frogs = [new FrogNpc(), new FrogNpc()];
 
@@ -509,18 +505,6 @@ export function createPondSimulation(THREE, input) {
           vy: (Math.random() - 0.5) * 0.4,
           size: 4 + Math.random() * 1.5,
           eaten: false
-        });
-      }
-
-      function dropFlowerPetal(x, y) {
-        sakuraPetals.push({
-          x: x, y: y,
-          vx: (Math.random() - 0.5) * 0.6,
-          vy: (Math.random() - 0.5) * 0.6,
-          angle: Math.random() * Math.PI * 2,
-          vRot: (Math.random() - 0.5) * 0.02,
-          scale: 0.8 + Math.random() * 0.4,
-          color: Math.random() > 0.3 ? '#ffb7c5' : '#ff9ebb'
         });
       }
 
@@ -1110,10 +1094,7 @@ export function createPondSimulation(THREE, input) {
         });
       }
 
-      let causticTime = 0;
       function renderUnderwaterScene(dt, visitors) {
-        causticTime += dt * 1.5;
-
         // Clear & Draw Pebble Bed Background
         uwCtx.fillStyle = '#031820';
         uwCtx.fillRect(0, 0, uwCanvas.width, uwCanvas.height);
@@ -1128,32 +1109,6 @@ export function createPondSimulation(THREE, input) {
         //   uwCtx.fill();
         //   uwCtx.restore();
         // });
-
-        // Procedural Light Caustics Pass
-        // if (config.enableCaustics) {
-        //   uwCtx.save();
-        //   uwCtx.fillStyle = themes[config.theme].caustics;
-        //   const cols = 10;
-        //   const rows = 7;
-        //   const cellW = uwCanvas.width / cols;
-        //   const cellH = uwCanvas.height / rows;
-
-        //   for (let r = 0; r < rows; r++) {
-        //     for (let c = 0; c < cols; c++) {
-        //       const x = c * cellW + cellW / 2;
-        //       const y = r * cellH + cellH / 2;
-
-        //       const offsetX = Math.sin(causticTime + c * 0.7 + r * 0.5) * 12 * dpr;
-        //       const offsetY = Math.cos(causticTime * 0.9 + c * 0.4 + r * 0.8) * 12 * dpr;
-        //       const radius = (14 + Math.sin(causticTime * 1.1 + c + r) * 6) * dpr;
-
-        //       uwCtx.beginPath();
-        //       uwCtx.arc(x + offsetX, y + offsetY, radius, 0, Math.PI * 2);
-        //       uwCtx.fill();
-        //     }
-        //   }
-        //   uwCtx.restore();
-        // }
 
         // Render Fish Underwater
         renderHandShadowsOnPondFloor(uwCtx, visitors);
@@ -1173,20 +1128,7 @@ export function createPondSimulation(THREE, input) {
           uwCtx.fill();
         });
 
-        // sakuraPetals.forEach(p => {
-        //   uwCtx.save();
-        //   uwCtx.translate(p.x, p.y);
-        //   uwCtx.rotate(p.angle);
-        //   uwCtx.fillStyle = p.color;
-        //   uwCtx.beginPath();
-        //   uwCtx.ellipse(0, 0, 8 * p.scale, 4 * p.scale, 0, 0, Math.PI * 2);
-        //   uwCtx.fill();
-        //   uwCtx.restore();
 
-        //   p.x += config.flowSpeed * 0.3 + p.vx;
-        //   p.y += config.flowSpeed * 0.1 + p.vy;
-        //   p.angle += p.vRot;
-        // });
 
         uwCtx.restore();
 
@@ -1247,7 +1189,7 @@ export function createPondSimulation(THREE, input) {
         frogs.forEach(frog => {
           frog.update(dt, width, height, lilyPads, config.enableLilies);
           frog.consumeWaterRippleEvents().forEach(ripple => {
-            emitRipple(ripple.x, ripple.y, 0.18);
+            emitRipple(ripple.x, ripple.y, ripple.intensity ?? 0.18);
           });
           frog.draw(foregroundCtx);
         });
@@ -1415,8 +1357,7 @@ export function createPondSimulation(THREE, input) {
         // Mode toggles
         const modeButtons = [
           { id: 'btnModeRipple', mode: 'ripple' },
-          { id: 'btnModeFood', mode: 'food' },
-          { id: 'btnModeFlower', mode: 'flower' }
+          { id: 'btnModeFood', mode: 'food' }
         ];
         modeButtons.forEach(item => {
           document.getElementById(item.id).addEventListener('click', () => {
@@ -1426,10 +1367,6 @@ export function createPondSimulation(THREE, input) {
           });
         });
 
-        document.getElementById('btnClearAll').addEventListener('click', () => {
-          foodPellets = [];
-          sakuraPetals = [];
-        });
 
         // Sliders
         const flowSlider = document.getElementById('flowSpeedSlider');
@@ -1460,8 +1397,15 @@ export function createPondSimulation(THREE, input) {
         });
 
         // Checkboxes
-        document.getElementById('chkCaustics').addEventListener('change', (e) => { config.enableCaustics = e.target.checked; });
-        document.getElementById('chkLilies').addEventListener('change', (e) => { config.enableLilies = e.target.checked; });
+        document.getElementById('chkLilies').addEventListener('change', (e) => {
+          const enabled = e.target.checked;
+
+          if (!enabled) {
+            frogs.forEach(frog => frog.disableLilyPads());
+          }
+
+          config.enableLilies = enabled;
+        });
 
         // Settings Drawer
         const drawer = document.getElementById('settingsDrawer');
