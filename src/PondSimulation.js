@@ -538,12 +538,102 @@ export function createPondSimulation(THREE, input) {
           lilyPads.push({
             x: position.x,
             y: position.y,
+            homeX: position.x,          // fixed anchor the pad floats around
+            homeY: position.y,
+            ox: 0, oy: 0,               // ripple-driven offset from home
+            vx: 0, vy: 0,               // offset velocity
+            rotOffset: 0, vRot: 0,      // ripple-driven spin
+            heave: 0,                   // smoothed wave height under the pad
+            phase: Math.random() * Math.PI * 2,
+            spinBias: (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5),
             radius,
             rotation: Math.random() * Math.PI * 2,
             notchAngle: Math.random() * Math.PI * 2,
             hasFlower: Math.random() > 0.5
           });
         }
+      }
+
+      // ---- Lily pad floating physics (tweak these) ----
+      const LILY_INFLUENCE_SCALE = 1.35; // pad's ripple boundary = radius * this
+      const LILY_PUSH = 650;             // how hard rings shove the pad (px/s²)
+      const LILY_SPIN = 3.0;             // how much rings twist the pad
+      const LILY_SPRING = 7;             // pull back toward home
+      const LILY_DAMPING = 2.6;          // lower = bouncier
+      const LILY_MAX_DRIFT = 14;         // max px a ripple can move a pad from home
+      const LILY_HEAVE_SCALE = 0.06;     // pad swells as a wave passes under it
+
+      function updateLilyPads(dt) {
+        if (!config.enableLilies || lilyPads.length === 0) return;
+
+        const step = Math.min(dt, 0.05);
+        const t = performance.now() / 1000;
+        const W = window.innerWidth;
+        const H = window.innerHeight;
+        const aspect = W / H;
+        const ringWidthSq = 0.025 * 0.025; // same ring width as the water shader
+
+        lilyPads.forEach(pad => {
+          // Pad centre in the same space the ripples use (see emitRipple)
+          const px = (pad.x / W - 0.5) * aspect;
+          const py = 0.5 - pad.y / H;
+          const boundaryUv = (pad.radius * LILY_INFLUENCE_SCALE) / H;
+
+          let ax = 0, ay = 0, torque = 0, wave = 0;
+
+          for (const r of activeRipplesList) {
+            if (r.age <= 0 || r.age > 3.5) continue;
+
+            const dx = px - r.x;
+            const dy = py - r.y;
+            const dist = Math.hypot(dx, dy);
+            const waveRadius = r.age * 0.27;
+            const gap = Math.abs(dist - waveRadius);
+            const damp = r.intensity * Math.exp(-r.age * 1.1) * Math.exp(-dist * 2.4);
+
+            // Any part of the ring inside the pad's boundary pushes the pad
+            const reach = Math.max(0, gap - boundaryUv);
+            const push = damp * Math.exp((-2 * reach * reach) / ringWidthSq);
+            if (push > 0.002 && dist > 1e-4) {
+              ax += (dx / dist) * push * LILY_PUSH;     // away from the ripple
+              ay += (-dy / dist) * push * LILY_PUSH;    // screen y is flipped
+              torque += push * pad.spinBias * LILY_SPIN;
+            }
+
+            // Actual wave height at the pad centre (same formula as the shader)
+            wave += Math.sin((dist - waveRadius) * 45) * damp *
+              Math.exp((-2 * gap * gap) / ringWidthSq);
+          }
+
+          // Spring + damper back to home
+          pad.vx += (ax - LILY_SPRING * pad.ox - LILY_DAMPING * pad.vx) * step;
+          pad.vy += (ay - LILY_SPRING * pad.oy - LILY_DAMPING * pad.vy) * step;
+          pad.ox += pad.vx * step;
+          pad.oy += pad.vy * step;
+
+          const drift = Math.hypot(pad.ox, pad.oy);
+          if (drift > LILY_MAX_DRIFT) {
+            const k = LILY_MAX_DRIFT / drift;
+            pad.ox *= k;
+            pad.oy *= k;
+          }
+
+          pad.vRot += (torque - 9 * pad.rotOffset - 3 * pad.vRot) * step;
+          pad.rotOffset = Math.max(-0.35, Math.min(0.35, pad.rotOffset + pad.vRot * step));
+
+          const targetHeave = Math.max(-1, Math.min(1, wave));
+          pad.heave += (targetHeave - pad.heave) * Math.min(1, step * 14);
+
+          // Idle floating: slow, slightly irregular bob so it never looks pinned
+          const idleX = Math.sin(t * 0.55 + pad.phase) * 2.2 +
+                        Math.sin(t * 0.23 + pad.phase * 1.7) * 1.5;
+          const idleY = Math.cos(t * 0.47 + pad.phase * 1.3) * 2.0 +
+                        Math.sin(t * 0.29 + pad.phase * 0.6) * 1.2;
+          pad.idleRot = Math.sin(t * 0.31 + pad.phase) * 0.035;
+
+          pad.x = pad.homeX + pad.ox + idleX;
+          pad.y = pad.homeY + pad.oy + idleY;
+        });
       }
 
       // --------------------------------------------------------------------
@@ -957,8 +1047,11 @@ export function createPondSimulation(THREE, input) {
         const scaleDpr = newDpr / oldDpr;
 
         lilyPads.forEach(pad => {
-          pad.x = Math.min(Math.max(pad.x * scaleX, pad.radius), Math.max(pad.radius, width - pad.radius));
-          pad.y = Math.min(Math.max(pad.y * scaleY, pad.radius), Math.max(pad.radius, height - pad.radius));
+          pad.homeX = Math.min(Math.max(pad.homeX * scaleX, pad.radius), Math.max(pad.radius, width - pad.radius));
+          pad.homeY = Math.min(Math.max(pad.homeY * scaleY, pad.radius), Math.max(pad.radius, height - pad.radius));
+          pad.x = pad.homeX;
+          pad.y = pad.homeY;
+          pad.ox = pad.oy = pad.vx = pad.vy = 0;
         });
 
         pebbles.forEach(pebble => {
@@ -1144,14 +1237,23 @@ export function createPondSimulation(THREE, input) {
 
         if (config.enableLilies) {
           lilyPads.forEach(pad => {
+            const scale = 1 + pad.heave * LILY_HEAVE_SCALE;
+
             foregroundCtx.save();
             foregroundCtx.translate(pad.x, pad.y);
-            foregroundCtx.rotate(pad.rotation);
+            foregroundCtx.rotate(pad.rotation + pad.rotOffset + (pad.idleRot ?? 0));
+            foregroundCtx.scale(scale, scale);
 
             const padGrad = foregroundCtx.createRadialGradient(0, 0, 4, 0, 0, pad.radius);
             padGrad.addColorStop(0, '#4f865c');
             padGrad.addColorStop(0.85, '#347247');
             padGrad.addColorStop(1, '#245535');
+
+            // Soft shadow on the water under the pad
+            foregroundCtx.shadowColor = 'rgba(2, 12, 18, 0.35)';
+            foregroundCtx.shadowBlur = 9 * dpr;
+            foregroundCtx.shadowOffsetX = 3 * dpr;
+            foregroundCtx.shadowOffsetY = 4 * dpr;
 
             foregroundCtx.fillStyle = padGrad;
             foregroundCtx.beginPath();
@@ -1159,6 +1261,15 @@ export function createPondSimulation(THREE, input) {
             foregroundCtx.lineTo(0, 0);
             foregroundCtx.closePath();
             foregroundCtx.fill();
+
+            // Thin wet rim where the pad meets the water
+            foregroundCtx.shadowColor = 'transparent';
+            foregroundCtx.shadowBlur = 0;
+            foregroundCtx.shadowOffsetX = 0;
+            foregroundCtx.shadowOffsetY = 0;
+            foregroundCtx.strokeStyle = 'rgba(200, 245, 255, 0.16)';
+            foregroundCtx.lineWidth = 1.2;
+            foregroundCtx.stroke();
 
             if (pad.hasFlower) {
               foregroundCtx.fillStyle = '#ffffff';
@@ -1192,30 +1303,6 @@ export function createPondSimulation(THREE, input) {
             emitRipple(ripple.x, ripple.y, ripple.intensity ?? 0.18);
           });
           frog.draw(foregroundCtx);
-        });
-        // hand state markers
-        visitors.forEach(v => {
-          if (!v.active) return;
-          const s = handVisualStates.get(v.id);
-          const dip = s?.dip ?? 0;
-          const r = 13 + 9 * (1 - dip);
-          foregroundCtx.save();
-          foregroundCtx.lineWidth = 2;
-          if (dip > 0.5) {
-            foregroundCtx.fillStyle = `rgba(56, 189, 248, ${0.22 * dip})`;
-            foregroundCtx.strokeStyle = `rgba(125, 220, 255, ${0.9 * dip})`;
-            foregroundCtx.beginPath();
-            foregroundCtx.arc(v.x, v.y, r, 0, Math.PI * 2);
-            foregroundCtx.fill();
-            foregroundCtx.stroke();
-          } else {
-            foregroundCtx.setLineDash([4, 5]);
-            foregroundCtx.strokeStyle = `rgba(255, 255, 255, ${0.35 + 0.3 * (1 - dip)})`;
-            foregroundCtx.beginPath();
-            foregroundCtx.arc(v.x, v.y, r, 0, Math.PI * 2);
-            foregroundCtx.stroke();
-          }
-          foregroundCtx.restore();
         });
 
         // water droplets flung off the hand
@@ -1315,15 +1402,16 @@ export function createPondSimulation(THREE, input) {
         });
         updateHandVisuals(visitorInputs, dt);
         updateRipples(dt);
+        updateLilyPads(dt);
         renderUnderwaterScene(dt, visitorInputs);
         renderForegroundScene(dt, visitorInputs);
 
-        // 1. Update interactive wave state
-        updateRipples(dt);
+        // // 1. Update interactive wave state
+        // updateRipples(dt);
 
-        // 2. Render Underwater canvas texture scene
-        renderUnderwaterScene(dt, visitorInputs);
-        renderForegroundScene(dt);
+        // // 2. Render Underwater canvas texture scene
+        // renderUnderwaterScene(dt, visitorInputs);
+        // renderForegroundScene(dt);
 
         // 3. Update WebGL Water Shader Uniforms
         waterUniforms.uTime.value += dt;

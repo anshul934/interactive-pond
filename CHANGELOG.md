@@ -40,7 +40,14 @@
  *removed redundant UI buttons like petal buttons and clear petals button
  *added a mini camera preview at bottom corner of screen which appears when the camera is turned on
  *fixed bug where frogs would still jump onto nothing when the lily pads were removed while the frogs were still going towards the lily pads.
- *added a splash effect after a lily pad is removed while a frog is still sitting on it.
 
 ## Day 3:
  ## Plan: fix bugs with frog behaviour and add features to make lily pads feel real instead of static.
+
+ ## Implementation:
+ *Fixed bugs with frog behaviour.
+ *added a splash effect after a lily pad is removed while a frog is still sitting on it.
+ *made the lily pads dynamically move and react to the environment.
+ 
+ ## Changes:
+ *found  and fixed a bug causing foreground to render twice, masking a hand marker being rendered.

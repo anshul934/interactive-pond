@@ -60,8 +60,14 @@ export class FrogNpc {
       return;
     }
 
-    if (this.state === "perching") {
-      this.waitTimer -= dt;
+      if (this.state === "perching") {
+        // Ride along with the floating pad
+        if (this.padAnchor && this.targetPad) {
+          this.x += this.targetPad.x - this.padAnchor.x;
+          this.y += this.targetPad.y - this.padAnchor.y;
+          this.padAnchor = { x: this.targetPad.x, y: this.targetPad.y };
+        }
+        this.waitTimer -= dt;
       if (this.waitTimer <= 0) {
         const pad = this.targetPad;
         this.beginHop(
@@ -117,25 +123,20 @@ export class FrogNpc {
 
   disableLilyPads() {
     if (this.state === "perching" && this.targetPad) {
-      const pad = this.targetPad;
+      // The pad vanished under the frog: it drops into the water instantly,
+      // with a splat (same ripple strength as a hand leaving the water).
       this.exitSide = Math.cos(this.angle) < 0 ? -1 : 1;
 
-      this.beginHop(
-        { x: this.x, y: this.y },
-        {
-          x: this.x + this.exitSide * pad.radius * 0.55,
-          y: this.y + pad.radius * 0.45
-        },
-        "swimmingOut",
-        0.8,
-        true
+      this.waterRippleEvents.push(
+        { x: this.x, y: this.y, intensity: 1.6 },
+        { x: this.x - 10, y: this.y + 6, intensity: 0.6 },
+        { x: this.x + 10, y: this.y + 6, intensity: 0.6 }
       );
 
-      this.hopDuration = 0.3;
       this.targetPad = null;
+      this.state = "swimmingOut";
       return;
     }
-
     if (this.state === "swimmingIn" || this.state === "hoppingToPad") {
       this.targetPad = null;
       this.state = "leaving";
@@ -198,6 +199,9 @@ export class FrogNpc {
     if (this.state === "hoppingToPad") {
       this.state = "perching";
       this.waitTimer = 2 + Math.random() * 5;
+      this.padAnchor = this.targetPad
+        ? { x: this.targetPad.x, y: this.targetPad.y }
+        : null;
     } else {
       this.state = "swimmingOut";
     }
@@ -207,7 +211,10 @@ export class FrogNpc {
     if (this.state === "waiting") return;
 
     const airborne = this.state === "hoppingToPad" || this.state === "hoppingToWater";
-    const swimming = this.state === "swimmingIn" || this.state === "swimmingOut";
+    const swimming =
+      this.state === "swimmingIn" ||
+      this.state === "swimmingOut" ||
+      this.state === "leaving";
     const bob = this.state === "perching"
       ? Math.sin(this.bobPhase) * 1.2
       : swimming ? Math.sin(this.swimPhase * 2) * 1.1 : 0;
