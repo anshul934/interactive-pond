@@ -193,7 +193,7 @@ export function createPondSimulation(THREE, input) {
             // Shallow water: slower, quicker-dying ripples (depth taken at the ripple origin)
             float ripDepth = waterDepth(ripPos);
             float waveRadius = age * 0.27 * mix(0.55, 1.0, ripDepth);
-            float waveWidth = 0.025;
+            float waveWidth = mix(0.016, 0.034, ripDepth);
             float d = abs(dist - waveRadius);
 
             float temporalDamp = exp(-age * mix(1.9, 1.1, ripDepth));
@@ -201,7 +201,7 @@ export function createPondSimulation(THREE, input) {
 
             if (d < waveWidth * 2.5) {
               float ring = exp(-2.0 * d * d / (waveWidth * waveWidth));
-              h += sin((dist - waveRadius) * 45.0) * intensity * 0.006 * ring *
+              h += sin((dist - waveRadius) * mix(62.0, 32.0, ripDepth)) * intensity * 0.006 * ring *
                   temporalDamp * spatialDamp * mix(0.6, 1.0, depth);
             }
           }
@@ -329,6 +329,20 @@ export function createPondSimulation(THREE, input) {
 
       const lmPoint = (lm, i) => ({ x: lm[i].x * window.innerWidth, y: lm[i].y * window.innerHeight });
 
+      let silt = [];
+      function spawnSilt(p) {
+        if (silt.length > 150) return;
+        silt.push({
+          x: p.x + (Math.random() - 0.5) * 12, y: p.y + (Math.random() - 0.5) * 12,
+          vx: (Math.random() - 0.5) * 14, vy: (Math.random() - 0.5) * 14,
+          r: 5 + Math.random() * 6, age: 0, life: 1.6 + Math.random() * 1.2
+        });
+      }
+      function updateSilt(dt) {
+        silt.forEach(s => { s.age += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.r += 14 * dt; });
+        silt = silt.filter(s => s.age < s.life);
+      }
+
       function updateHandVisuals(visitors, dt) {
         const activeIds = new Set();
         visitors.forEach(v => {
@@ -344,12 +358,14 @@ export function createPondSimulation(THREE, input) {
           const tips = hasLm
             ? [4, 8, 12, 16, 20].map(i => lmPoint(v.landmarks, i))
             : [{ x: v.x, y: v.y }];
+          const feel = handDepthFeel(palm.x, palm.y);
 
           if (v.dipped && !s.wasDipped) {            // entering the water
-            emitRipple(palm.x, palm.y, 2.6);
-            tips.forEach(t => emitRipple(t.x, t.y, 1.3));
+            emitRipple(palm.x, palm.y, 2.6 * feel.ripple);
+            tips.forEach(t => emitRipple(t.x, t.y, 1.3 * feel.ripple));
+            emitSplash(tips, 1800, 0, 0, feel.spray);
             playWaterSound('splash', 0.25);
-          } else if (!v.dipped && s.wasDipped) {     // leaving the water
+          } else if (!v.dipped && s.wasDipped) {     // leaving the water     // leaving the water
             emitRipple(palm.x, palm.y, 1.6);
             for (let i = 0; i < 12; i++) {
               const t = tips[i % tips.length];
@@ -369,9 +385,15 @@ export function createPondSimulation(THREE, input) {
           if (v.dipped && s.dip > 0.9) {
             s.ringTimer -= dt;
             if (s.ringTimer <= 0) {
-              s.ringTimer = v.moved ? 0.25 : 0.8;
-              tips.slice(0, 2).forEach(t => emitRipple(t.x, t.y, 0.5));
+              s.ringTimer = (v.moved ? 0.25 : 0.8) * feel.ring;
+              tips.slice(0, 2).forEach(t => emitRipple(t.x, t.y, 0.5 * feel.ripple));
             }
+          }
+
+          // Shallow water: a moving hand scrapes the bottom and kicks up sand
+          if (v.dipped && v.moved && feel.depth < 0.4 &&
+              Math.random() < dt * 30 * (1 - feel.depth / 0.4)) {
+            spawnSilt(tips[Math.floor(Math.random() * tips.length)]);
           }
         });
         for (const id of handVisualStates.keys()) {
@@ -390,6 +412,7 @@ export function createPondSimulation(THREE, input) {
           }
         });
         droplets = droplets.filter(d => !d.landed);
+        updateSilt(dt);
       }
 
       function emitRipple(px, py, intensity = 1.0) {
@@ -419,6 +442,19 @@ export function createPondSimulation(THREE, input) {
         const r = Math.cbrt(qx ** 3 + qy ** 3) + wobble;
         const t = Math.min(Math.max((r - 0.2) / 0.8, 0), 1);
         return 1 - t * t * (3 - 2 * t);
+      }
+
+      function handDepthFeel(x, y) {
+        const d = waterDepthAt(x, y);
+        return {
+          depth: d,
+          ripple: 0.55 + 0.9 * d,           // ring strength: small in shallows, heavy in deep
+          spray: 1.7 - 1.1 * d,             // droplet amount: lots in shallows, few in deep
+          wake: 0.4 + 1.4 * d,              // strength of the travelling wave ahead of the hand
+          sprayThreshold: 0.55 + 0.65 * d,  // multiplies SPLASH_MIN_SPEED: shallows splash sooner
+          wakeThreshold: 1.35 - 0.85 * d,   // multiplies SPLASH_MIN_SPEED: deep builds wakes sooner
+          ring: 0.6 + 0.8 * d               // resting-ring interval: quick in shallows, slow in deep
+        };
       }
 
       // ---- Splash tuning ----
@@ -546,25 +582,30 @@ export function createPondSimulation(THREE, input) {
       const hasHandLandmarks = visitor.landmarks?.length >= 21;
       visitorDipStates.set(visitor.id, Boolean(visitor.dipped));
 
-      // Splash only on fast movement, from the whole hand, plus a directional wave
+      const feel = handDepthFeel(visitor.x, visitor.y);
       const touchingWater = !hasHandLandmarks || visitor.dipped;
-      if (touchingWater && velocity > SPLASH_MIN_SPEED && nowSec - state.lastSplash > SPLASH_COOLDOWN) {
-        state.lastSplash = nowSec;
-        const points = getVisitorFishSpots(visitor);
-        emitSplash(points, velocity, vx, vy);
 
-        if (nowSec - state.lastWave > SPLASH_WAVE_COOLDOWN) {
-          state.lastWave = nowSec;
-          const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
-          const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
-          emitSplashWave(cx, cy, vx, vy, 1.5 + 2.0 * splashLevel(velocity));
-        }
+      // Spray: shallow water splashes at gentle speeds, deep water needs a harder slap
+      if (touchingWater && velocity > SPLASH_MIN_SPEED * feel.sprayThreshold &&
+          nowSec - state.lastSplash > SPLASH_COOLDOWN) {
+        state.lastSplash = nowSec;
+        emitSplash(getVisitorFishSpots(visitor), velocity, vx, vy, feel.spray);
+      }
+
+      // Wake: deep water is pushed into a big travelling wave even at moderate speed
+      if (touchingWater && velocity > SPLASH_MIN_SPEED * feel.wakeThreshold &&
+          nowSec - state.lastWave > SPLASH_WAVE_COOLDOWN) {
+        state.lastWave = nowSec;
+        const points = getVisitorFishSpots(visitor);
+        const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
+        const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+        emitSplashWave(cx, cy, vx, vy, (1.5 + 2.0 * splashLevel(velocity)) * feel.wake);
       }
 
       if (hasHandLandmarks && visitor.dipped && visitor.moved && speed > 1.5) {
-        emitHandOutlineRipples(visitor, Math.min(speed * 0.08, 1.2));
+        emitHandOutlineRipples(visitor, Math.min(speed * 0.08, 1.2) * feel.ripple);
       } else if (!hasHandLandmarks && visitor.moved && speed > 1.5) {
-        emitRipple(visitor.x, visitor.y, Math.min(speed * 0.08, 1.2));
+        emitRipple(visitor.x, visitor.y, Math.min(speed * 0.08, 1.2) * feel.ripple);
       }
 
       if (!visitor.moved) return;
@@ -577,8 +618,9 @@ export function createPondSimulation(THREE, input) {
 
       function handlePointerAction(px, py) {
         if (config.interactionMode === 'ripple') {
-          emitRipple(px, py, 2.2);
-          emitSplash([{ x: px, y: py }], 1800, 0, 0, 1.2);
+          const feel = handDepthFeel(px, py);
+          emitRipple(px, py, 2.2 * feel.ripple);
+          emitSplash([{ x: px, y: py }], 1800, 0, 0, 1.2 * feel.spray);
           playWaterSound('plop', 0.4);
         } else if (config.interactionMode === 'food') {
           dropFoodPellet(px, py);
@@ -849,6 +891,54 @@ export function createPondSimulation(THREE, input) {
           pad.x = pad.homeX + pad.ox + idleX;
           pad.y = pad.homeY + pad.oy + idleY;
         });
+      }
+
+      // Net push of all ripples/waves at a screen point, as a direction-weighted
+      // strength (screen space). Used by frogs to sway with the water.
+      function getWaterPush(px, py, boundaryPx = 14) {
+        const W = window.innerWidth;
+        const H = window.innerHeight;
+        const aspect = W / H;
+        const x = (px / W - 0.5) * aspect;
+        const y = 0.5 - py / H;
+        const boundaryUv = boundaryPx / H;
+        const ringWidthSq = 0.025 * 0.025;
+        const OWN_ORIGIN_RADIUS = 0.03; // ignore a ripple born right under the frog
+        let ax = 0, ay = 0;
+
+        for (const r of activeRipplesList) {
+          if (r.age <= 0 || r.age > 3.5) continue;
+          const dx = x - r.x;
+          const dy = y - r.y;
+          const dist = Math.hypot(dx, dy);
+          if (dist < OWN_ORIGIN_RADIUS) continue;
+
+          const waveRadius = r.age * 0.27 * (0.55 + 0.45 * r.depth);
+          const gap = Math.abs(dist - waveRadius);
+          const damp = r.intensity * Math.exp(-r.age * (1.9 - 0.8 * r.depth)) * Math.exp(-dist * 2.4);
+          const reach = Math.max(0, gap - boundaryUv);
+          const push = damp * Math.exp((-2 * reach * reach) / ringWidthSq);
+          if (push > 0.002) {
+            ax += (dx / dist) * push;    // away from the ripple origin
+            ay += (-dy / dist) * push;   // screen y is flipped
+          }
+        }
+
+        // Directional splash waves push along their travel direction
+        for (const w of splashWaves) {
+          if (w.age <= 0 || w.age > SPLASH_WAVE_LIFE) continue;
+          const dist = Math.hypot(x - w.x, y - w.y);
+          const gap = Math.abs(dist - w.age * 0.30);
+          const damp = w.intensity * Math.exp(-w.age * 1.3) * Math.exp(-dist * 2.0);
+          const reach = Math.max(0, gap - boundaryUv);
+          const push = damp * Math.exp((-2 * reach * reach) / ringWidthSq);
+          if (push > 0.002) {
+            ax += w.dx * push;
+            ay += -w.dy * push;
+          }
+        }
+
+        return { ax, ay };
       }
 
       // --------------------------------------------------------------------
@@ -1421,6 +1511,13 @@ export function createPondSimulation(THREE, input) {
         renderHandShadowsOnPondFloor(uwCtx, visitors);
         uwCtx.save();
         uwCtx.scale(dpr, dpr);
+        silt.forEach(s => {
+          const a = 0.22 * (1 - s.age / s.life);
+          uwCtx.fillStyle = `rgba(200, 180, 140, ${a})`;
+          uwCtx.beginPath();
+          uwCtx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          uwCtx.fill();
+        });
         fishes.forEach(fish => {
           fish.update(dt);
           fish.draw(uwCtx);
@@ -1511,7 +1608,9 @@ export function createPondSimulation(THREE, input) {
           });
         }
 
-        frogs.forEach(frog => {
+          frogs.forEach(frog => {
+          const push = getWaterPush(frog.x, frog.y);
+          frog.applyWaterPush(push.ax, push.ay, dt);
           frog.update(dt, width, height, lilyPads, config.enableLilies, waterDepthAt);
           frog.consumeWaterRippleEvents().forEach(ripple => {
             emitRipple(ripple.x, ripple.y, ripple.intensity ?? 0.18);

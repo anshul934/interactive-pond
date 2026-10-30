@@ -1,6 +1,11 @@
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const lerp = (from, to, amount) => from + (to - from) * amount;
 const easeInOut = (value) => value * value * (3 - 2 * value);
+// ---- Frog water-sway tuning ----
+const FROG_PUSH = 500;       // how hard ripples/waves shove the frog (px/s²)
+const FROG_SPRING = 7;       // pull back to its swim line
+const FROG_DAMPING = 2.6;    // lower = bouncier
+const FROG_MAX_DRIFT = 12;   // max px a wave can displace the frog
 
 export class FrogNpc {
   constructor() {
@@ -20,6 +25,10 @@ export class FrogNpc {
     this.swimPhase = Math.random() * Math.PI * 2;
     this.waterRippleEvents = [];
     this.splashEvents = []; // droplet splashes, consumed by the simulation
+    this.swayX = 0;  // wave-driven visual offset (px)
+    this.swayY = 0;
+    this.swayVx = 0;
+    this.swayVy = 0;
   }
 
   update(dt, width, height, lilyPads, enabled, depthAt = () => 1) {
@@ -155,12 +164,7 @@ export class FrogNpc {
       // treads water for a beat, then swims away.
       this.exitSide = Math.cos(this.angle) < 0 ? -1 : 1;
 
-      this.waterRippleEvents.push(
-        { x: this.x, y: this.y, intensity: 3.0 },
-        { x: this.x - 12, y: this.y + 7, intensity: 1.4 },
-        { x: this.x + 12, y: this.y + 7, intensity: 1.4 }
-      );
-      this.splashEvents.push({ x: this.x, y: this.y, power: 1.4 });
+      this.emitWaterEntrySplash(this.x, this.y);
 
       this.targetPad = null;
       this.padAnchor = null;
@@ -176,6 +180,46 @@ export class FrogNpc {
     }
   }
 
+  applyWaterPush(ax, ay, dt) {
+    const step = Math.min(dt, 0.05);
+    const inWater =
+      this.state === "swimmingIn" ||
+      this.state === "swimmingOut" ||
+      this.state === "leaving" ||
+      this.state === "treading";
+
+    if (!inWater) {
+      // On a pad / mid-hop / offscreen: ease any sway back to zero
+      const k = Math.min(1, step * 12);
+      this.swayX -= this.swayX * k;
+      this.swayY -= this.swayY * k;
+      this.swayVx = 0;
+      this.swayVy = 0;
+      return;
+    }
+
+    this.swayVx += (ax * FROG_PUSH - FROG_SPRING * this.swayX - FROG_DAMPING * this.swayVx) * step;
+    this.swayVy += (ay * FROG_PUSH - FROG_SPRING * this.swayY - FROG_DAMPING * this.swayVy) * step;
+    this.swayX += this.swayVx * step;
+    this.swayY += this.swayVy * step;
+
+    const drift = Math.hypot(this.swayX, this.swayY);
+    if (drift > FROG_MAX_DRIFT) {
+      const k = FROG_MAX_DRIFT / drift;
+      this.swayX *= k;
+      this.swayY *= k;
+    }
+  }
+
+  emitWaterEntrySplash(x, y) {
+    this.waterRippleEvents.push(
+      { x, y, intensity: 3.0 },
+      { x: x - 12, y: y + 7, intensity: 1.4 },
+      { x: x + 12, y: y + 7, intensity: 1.4 }
+    );
+    this.splashEvents.push({ x, y, power: 1.4 });
+  }
+
   moveTowards(dx, dy, speed, dt) {
     const distance = Math.hypot(dx, dy);
     if (distance === 0) return;
@@ -185,6 +229,11 @@ export class FrogNpc {
   }
 
   beginHop(from, to, nextState, rippleIntensity = 0.18, rippleOnLanding = false) {
+    // Bake any wave sway into the start point so the hop doesn't pop
+    if (this.swayX || this.swayY) {
+      from = { x: from.x + this.swayX, y: from.y + this.swayY };
+      this.swayX = this.swayY = this.swayVx = this.swayVy = 0;
+    }
     this.hopStart = from;
     this.hopEnd = to;
     this.hopTime = 0;
@@ -193,11 +242,11 @@ export class FrogNpc {
       ? { x: to.x, y: to.y, intensity: rippleIntensity }
       : null;
 
-    if (!rippleOnLanding) {
-      const ripplePosition = nextState === "perching" ? from : to;
+    // Pad take-off ripple only; hops into the water splash on landing instead
+    if (!rippleOnLanding && nextState === "perching") {
       this.waterRippleEvents.push({
-        x: ripplePosition.x,
-        y: ripplePosition.y,
+        x: from.x,
+        y: from.y,
         intensity: rippleIntensity
       });
     }
@@ -240,6 +289,8 @@ export class FrogNpc {
         ? { x: this.targetPad.x, y: this.targetPad.y }
         : null;
     } else {
+      // jumped off a pad under its own power: same splash as a vanishing pad
+      this.emitWaterEntrySplash(this.x, this.y);
       this.state = "swimmingOut";
     }
   }
@@ -258,7 +309,7 @@ export class FrogNpc {
         ? Math.sin(this.bobPhase * 1.5) * 1.6
         : swimming ? Math.sin(this.swimPhase * 2) * 1.1 : 0;
     ctx.save();
-    ctx.translate(this.x, this.y + bob);
+    ctx.translate(this.x + this.swayX, this.y + this.swayY + bob);
     const facingLeft = Math.cos(this.angle) < 0;
     ctx.scale(facingLeft ? -1.3 : 1.3, 1.3);
 
