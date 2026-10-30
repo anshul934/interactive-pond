@@ -88,6 +88,7 @@ export function createPondSimulation(THREE, input) {
       const uwTexture = new THREE.CanvasTexture(uwCanvas);
       uwTexture.minFilter = THREE.LinearFilter;
       uwTexture.magFilter = THREE.LinearFilter;
+      uwTexture.premultiplyAlpha = true;   // transparent canvas composites cleanly
 
       // --------------------------------------------------------------------
       // 3. GPU WATER SHADER MATERIAL (HIGH-RES ANALYTIC VECTOR WAVES)
@@ -125,7 +126,43 @@ export function createPondSimulation(THREE, input) {
         uniform vec3 uWaterDeep;
         uniform vec3 uSkyColor;
 
-        // Gerstner Wave Formula for continuous surface flow
+        // ---------- DEPTH FIELD (mirrored in JS as waterDepthAt) ----------
+        float shoreWobble(vec2 p) {
+          return 0.05 * sin(p.x * 5.0 + 1.3 * sin(p.y * 3.0)) + 0.04 * sin(p.y * 7.0 + p.x * 2.0);
+        }
+        float shoreRadius(vec2 p) {
+          float aspect = uResolution.x / uResolution.y;
+          vec2 q = abs(p) / vec2(aspect * 0.5, 0.5);
+          return pow(q.x * q.x * q.x + q.y * q.y * q.y, 1.0 / 3.0) + shoreWobble(p);
+        }
+        // 0 = shoreline, 1 = deepest. Shallow band is the outer ~25%.
+        float waterDepth(vec2 p) {
+          return 1.0 - smoothstep(0.2, 1.0, shoreRadius(p));
+        }
+
+        // ---------- BOTTOM (visible only in shallows) ----------
+        float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+        float vnoise(vec2 p) {
+          vec2 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x),
+                    mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+        }
+        float causticPattern(vec2 p, float t) {
+          vec2 a = p * 10.0;
+          float v = sin(a.x + t * 0.8 + sin(a.y * 1.3 + t * 0.6)) +
+                    sin(a.y * 1.1 - t * 0.7 + sin(a.x * 0.9 - t * 0.5));
+          v = 1.0 - abs(v * 0.5);
+          return pow(clamp(v, 0.0, 1.0), 6.0);
+        }
+        vec3 pondBed(vec2 p) {
+          float n = vnoise(p * 14.0) * 0.6 + vnoise(p * 40.0) * 0.4;
+          vec3 bed = mix(uWaterBase * 1.6, uWaterBase * 2.6 + vec3(0.05, 0.05, 0.03), n);
+          bed += vec3(0.55, 0.85, 0.80) * causticPattern(p, uTime * (0.4 + uFlowSpeed)) * 0.22;
+          return bed;
+        }
+
+        // ---------- WAVES ----------
         float gerstner(vec2 pos, vec2 dir, float steepness, float wavelength, float speed) {
           float k = 6.2831853 / wavelength;
           float c = sqrt(9.8 / k);
@@ -133,16 +170,17 @@ export function createPondSimulation(THREE, input) {
           return steepness * sin(f) / k;
         }
 
-        // Calculate smooth heightfield height at coordinates
         float getWaterHeight(vec2 pos) {
-          float h = 0.0;
-          
-          // Organic fluid directional drift
-          h += gerstner(pos, normalize(vec2(1.0, 0.4)), 0.022, 0.22, 0.8);
-          h += gerstner(pos, normalize(vec2(0.6, 0.8)), 0.012, 0.12, 1.1);
-          h += gerstner(pos, normalize(vec2(-0.4, 0.9)), 0.008, 0.06, 1.4);
+          float depth = waterDepth(pos);
+          float swell = mix(0.35, 1.0, depth);   // big swells only build up in deep water
+          float chop  = 1.0 - depth;             // small fast chop lives in the shallows
 
-          // Sum active interactive ripple wave rings
+          float h = 0.0;
+          h += gerstner(pos, normalize(vec2(1.0, 0.4)),  0.022 * swell, 0.22, 0.8);
+          h += gerstner(pos, normalize(vec2(0.6, 0.8)),  0.012 * swell, 0.12, 1.1);
+          h += gerstner(pos, normalize(vec2(-0.4, 0.9)), 0.008,         0.06, 1.4);
+          h += gerstner(pos, normalize(vec2(-0.8, 0.5)), 0.006 * chop,  0.045, 1.7);
+
           for (int i = 0; i < 32; i++) {
             vec4 rip = uRipples[i];
             float age = rip.z;
@@ -152,20 +190,22 @@ export function createPondSimulation(THREE, input) {
             float intensity = rip.w;
             float dist = distance(pos, ripPos);
 
-            float waveRadius = age * 0.27;
+            // Shallow water: slower, quicker-dying ripples (depth taken at the ripple origin)
+            float ripDepth = waterDepth(ripPos);
+            float waveRadius = age * 0.27 * mix(0.55, 1.0, ripDepth);
             float waveWidth = 0.025;
             float d = abs(dist - waveRadius);
 
-            float temporalDamp = exp(-age * 1.1);
+            float temporalDamp = exp(-age * mix(1.9, 1.1, ripDepth));
             float spatialDamp = exp(-dist * 2.4);
 
             if (d < waveWidth * 2.5) {
               float ring = exp(-2.0 * d * d / (waveWidth * waveWidth));
-              h += sin((dist - waveRadius) * 45.0) * intensity * 0.006 * ring * temporalDamp * spatialDamp;
+              h += sin((dist - waveRadius) * 45.0) * intensity * 0.006 * ring *
+                  temporalDamp * spatialDamp * mix(0.6, 1.0, depth);
             }
           }
-          
-          // Directional splash waves: an egg-shaped ring pushed ahead of the movement
+
           for (int i = 0; i < 8; i++) {
             vec4 sw = uSplashWaves[i];
             float sAge = sw.z;
@@ -177,11 +217,8 @@ export function createPondSimulation(THREE, input) {
             float along = dot(rel, dir);
             float across = dot(rel, vec2(-dir.y, dir.x));
 
-            // Forward distance is compressed (wave reaches further ahead),
-            // backward distance is stretched (wave barely goes behind)
             float squash = along > 0.0 ? 0.62 : 1.7;
             float sDist = length(vec2(along * squash, across));
-
             float sRadius = sAge * 0.30;
             float sD = abs(sDist - sRadius);
             float sWidth = 0.03;
@@ -193,7 +230,8 @@ export function createPondSimulation(THREE, input) {
 
             if (sD < sWidth * 2.5) {
               float sRing = exp(-2.0 * sD * sD / (sWidth * sWidth));
-              h += sin((sDist - sRadius) * 38.0) * sw.w * 0.008 * sRing * directional * sTemporal * sSpatial;
+              h += sin((sDist - sRadius) * 38.0) * sw.w * 0.008 * sRing * directional *
+                  sTemporal * sSpatial * mix(0.6, 1.0, depth);
             }
           }
           return h;
@@ -201,42 +239,50 @@ export function createPondSimulation(THREE, input) {
 
         void main() {
           vec2 uv = vUv;
-          vec2 aspectUv = (vUv - 0.5) * vec2(uResolution.x / uResolution.y, 1.0);
+          float aspect = uResolution.x / uResolution.y;
+          vec2 aspectUv = (vUv - 0.5) * vec2(aspect, 1.0);
+          float depth = waterDepth(aspectUv);
 
-          // Analytical vector normal calculation using finite differences
           float eps = 0.0018;
           float hC = getWaterHeight(aspectUv);
           float hR = getWaterHeight(aspectUv + vec2(eps, 0.0));
           float hU = getWaterHeight(aspectUv + vec2(0.0, eps));
-
           vec3 normal = normalize(vec3((hC - hR) / eps, (hC - hU) / eps, 1.0));
 
-          // Snell's Law Refraction distortion for underwater scene
-          vec2 refractOffset = normal.xy * 0.042;
+          // Refraction: weak in shallows, stronger in deep water
+          vec2 refractOffset = normal.xy * 0.042 * mix(0.55, 1.15, depth);
           vec2 refractUv = clamp(uv + refractOffset, 0.001, 0.999);
-          vec3 underwaterColor = texture2D(uUnderwaterTexture, refractUv).rgb;
+          vec4 uw = texture2D(uUnderwaterTexture, refractUv);   // premultiplied fish/shadows
 
-          // Water depth tint blending
-          underwaterColor = mix(underwaterColor, uWaterBase, 0.24);
+          // Pond floor, seen through the refracted surface
+          vec2 bedPos = (refractUv - 0.5) * vec2(aspect, 1.0);
+          float bedVisible = pow(1.0 - depth, 1.6);
+          vec3 bed = pondBed(bedPos) * bedVisible;
+          vec3 column = mix(bed, uWaterDeep, smoothstep(0.0, 1.0, depth) * 0.92);
 
-          // Vector Lighting & Optics
+          // Fish: lose contrast and sink into the murk as the water gets deeper
+          vec3 creature = mix(uw.rgb, uWaterDeep * uw.a, depth * 0.35);
+          vec3 underwaterColor = creature + column * (1.0 - uw.a);
+
+          underwaterColor = mix(underwaterColor, uWaterBase, mix(0.08, 0.34, depth));
+
           vec3 viewDir = vec3(0.0, 0.0, 1.0);
           vec3 lightDir = normalize(vec3(-0.4, 0.55, 0.75));
 
-          // Fresnel blend curve between refraction and reflection
           float fresnel = pow(1.0 - max(dot(viewDir, normal), 0.0), 3.0);
-          fresnel = mix(0.08, 0.62, fresnel) * uReflectionIntensity;
+          fresnel = mix(0.08, 0.62, fresnel) * uReflectionIntensity * mix(0.55, 1.0, depth);
 
-          // Blinn-Phong Specular Sun Highlights on wave crests
           vec3 halfDir = normalize(lightDir + viewDir);
           float spec = pow(max(dot(normal, halfDir), 0.0), 140.0);
           vec3 specularGlint = vec3(1.0, 0.98, 0.92) * spec * 2.2 * uReflectionIntensity;
 
-          // Sky Reflection Gradient
           vec3 skyReflect = uSkyColor + vec3(0.06, 0.10, 0.14) * normal.y;
-
-          // Final Composite Surface Color
           vec3 finalColor = mix(underwaterColor, skyReflect, fresnel) + specularGlint;
+
+          // Gentle lapping highlight right at the waterline
+          float rim = 1.0 - smoothstep(0.0, 0.14, depth);
+          float lap = 0.5 + 0.5 * sin(depth * 90.0 - uTime * 1.2);
+          finalColor += vec3(0.75, 0.95, 0.95) * rim * smoothstep(0.7, 1.0, lap) * 0.07;
 
           gl_FragColor = vec4(finalColor, 1.0);
         }
@@ -355,12 +401,24 @@ export function createPondSimulation(THREE, input) {
           x: aspectX,
           y: aspectY,
           age: 0,
-          intensity: intensity * config.rippleForceMultiplier
+          intensity: intensity * config.rippleForceMultiplier,
+          depth: waterDepthAt(px, py)
         });
 
         if (activeRipplesList.length > MAX_RIPPLES) {
           activeRipplesList.shift();
         }
+      }
+
+      function waterDepthAt(px, py) {
+        const W = window.innerWidth, H = window.innerHeight, aspect = W / H;
+        const x = (px / W - 0.5) * aspect;
+        const y = 0.5 - py / H;
+        const wobble = 0.05 * Math.sin(x * 5 + 1.3 * Math.sin(y * 3)) + 0.04 * Math.sin(y * 7 + x * 2);
+        const qx = Math.abs(x) / (aspect * 0.5), qy = Math.abs(y) / 0.5;
+        const r = Math.cbrt(qx ** 3 + qy ** 3) + wobble;
+        const t = Math.min(Math.max((r - 0.2) / 0.8, 0), 1);
+        return 1 - t * t * (3 - 2 * t);
       }
 
       // ---- Splash tuning ----
@@ -744,9 +802,9 @@ export function createPondSimulation(THREE, input) {
             const dx = px - r.x;
             const dy = py - r.y;
             const dist = Math.hypot(dx, dy);
-            const waveRadius = r.age * 0.27;
+            const waveRadius = r.age * 0.27 * (0.55 + 0.45 * r.depth);
             const gap = Math.abs(dist - waveRadius);
-            const damp = r.intensity * Math.exp(-r.age * 1.1) * Math.exp(-dist * 2.4);
+            const damp = r.intensity * Math.exp(-r.age * (1.9 - 0.8 * r.depth)) * Math.exp(-dist * 2.4);
 
             // Any part of the ring inside the pad's boundary pushes the pad
             const reach = Math.max(0, gap - boundaryUv);
@@ -1346,8 +1404,7 @@ export function createPondSimulation(THREE, input) {
 
       function renderUnderwaterScene(dt, visitors) {
         // Clear & Draw Pebble Bed Background
-        uwCtx.fillStyle = '#031820';
-        uwCtx.fillRect(0, 0, uwCanvas.width, uwCanvas.height);
+        uwCtx.clearRect(0, 0, uwCanvas.width, uwCanvas.height);
 
         // pebbles.forEach(p => {
         //   uwCtx.save();
@@ -1455,9 +1512,13 @@ export function createPondSimulation(THREE, input) {
         }
 
         frogs.forEach(frog => {
-          frog.update(dt, width, height, lilyPads, config.enableLilies);
+          frog.update(dt, width, height, lilyPads, config.enableLilies, waterDepthAt);
           frog.consumeWaterRippleEvents().forEach(ripple => {
             emitRipple(ripple.x, ripple.y, ripple.intensity ?? 0.18);
+          });
+          frog.consumeSplashEvents().forEach(splash => {
+            emitSplash([{ x: splash.x, y: splash.y }], 1800, 0, 0, splash.power);
+            playWaterSound('splash', 0.3);
           });
           frog.draw(foregroundCtx);
         });

@@ -19,9 +19,22 @@ export class FrogNpc {
     this.bobPhase = Math.random() * Math.PI * 2;
     this.swimPhase = Math.random() * Math.PI * 2;
     this.waterRippleEvents = [];
+    this.splashEvents = []; // droplet splashes, consumed by the simulation
   }
 
-  update(dt, width, height, lilyPads, enabled) {
+  update(dt, width, height, lilyPads, enabled, depthAt = () => 1) {
+    // How "deep" the frog's current spot is: 1 = deep (full speed), lower = shallow (slower)
+    const wade = 0.45 + 0.55 * depthAt(this.x, this.y);
+
+    // While swimming in or out through the shallows, leave a small ripple every 0.28s
+    if ((this.state === "swimmingIn" || this.state === "swimmingOut") && wade < 0.8) {
+      this.wadeTimer = (this.wadeTimer ?? 0) - dt;
+      if (this.wadeTimer <= 0) {
+        this.wadeTimer = 0.28;
+        this.waterRippleEvents.push({ x: this.x, y: this.y + 4, intensity: 0.25 });
+      }
+    }
+
     this.bobPhase += dt * 4;
     if (this.state === "swimmingIn" || this.state === "swimmingOut" || this.state === "leaving") {
       this.swimPhase += dt * 12;
@@ -50,7 +63,7 @@ export class FrogNpc {
           "perching"
         );
       } else {
-        this.moveTowards(dx, dy, 72, dt);
+        this.moveTowards(dx, dy, 72 * wade, dt);
       }
       return;
     }
@@ -60,7 +73,22 @@ export class FrogNpc {
       return;
     }
 
-      if (this.state === "perching") {
+    if (this.state === "treading") {
+      // Frog has just dropped into the water: it floats in place for a moment
+      // before it swims away.
+      this.waitTimer -= dt;
+
+      // A small, fainter follow-up ripple as the water settles
+      if (!this.settleRippleDone && this.waitTimer < this.treadDuration * 0.5) {
+        this.settleRippleDone = true;
+        this.waterRippleEvents.push({ x: this.x, y: this.y + 4, intensity: 0.7 });
+      }
+
+      if (this.waitTimer <= 0) this.state = "swimmingOut";
+      return;
+    }
+
+    if (this.state === "perching") {
         // Ride along with the floating pad
         if (this.padAnchor && this.targetPad) {
           this.x += this.targetPad.x - this.padAnchor.x;
@@ -89,7 +117,7 @@ export class FrogNpc {
       const dx = targetX - this.x;
       const dy = targetY - this.y;
       this.angle = Math.atan2(dy, dx);
-      this.moveTowards(dx, dy, 90, dt);
+      this.moveTowards(dx, dy, 90 * wade, dt);
 
       if ((this.exitSide < 0 && this.x < -35) || (this.exitSide > 0 && this.x > width + 35)) {
         this.state = "waiting";
@@ -123,18 +151,23 @@ export class FrogNpc {
 
   disableLilyPads() {
     if (this.state === "perching" && this.targetPad) {
-      // The pad vanished under the frog: it drops into the water instantly,
-      // with a splat (same ripple strength as a hand leaving the water).
+      // The pad vanished under the frog: it drops into the water with a splash,
+      // treads water for a beat, then swims away.
       this.exitSide = Math.cos(this.angle) < 0 ? -1 : 1;
 
       this.waterRippleEvents.push(
-        { x: this.x, y: this.y, intensity: 1.6 },
-        { x: this.x - 10, y: this.y + 6, intensity: 0.6 },
-        { x: this.x + 10, y: this.y + 6, intensity: 0.6 }
+        { x: this.x, y: this.y, intensity: 3.0 },
+        { x: this.x - 12, y: this.y + 7, intensity: 1.4 },
+        { x: this.x + 12, y: this.y + 7, intensity: 1.4 }
       );
+      this.splashEvents.push({ x: this.x, y: this.y, power: 1.4 });
 
       this.targetPad = null;
-      this.state = "swimmingOut";
+      this.padAnchor = null;
+      this.treadDuration = 0.45 + Math.random() * 0.25;  // buffer before swimming away
+      this.waitTimer = this.treadDuration;
+      this.settleRippleDone = false;
+      this.state = "treading";
       return;
     }
     if (this.state === "swimmingIn" || this.state === "hoppingToPad") {
@@ -174,6 +207,10 @@ export class FrogNpc {
 
   consumeWaterRippleEvents() {
     return this.waterRippleEvents.splice(0);
+  }
+
+  consumeSplashEvents() {
+    return this.splashEvents.splice(0);
   }
 
   updateHop(dt) {
@@ -217,7 +254,9 @@ export class FrogNpc {
       this.state === "leaving";
     const bob = this.state === "perching"
       ? Math.sin(this.bobPhase) * 1.2
-      : swimming ? Math.sin(this.swimPhase * 2) * 1.1 : 0;
+      : this.state === "treading"
+        ? Math.sin(this.bobPhase * 1.5) * 1.6
+        : swimming ? Math.sin(this.swimPhase * 2) * 1.1 : 0;
     ctx.save();
     ctx.translate(this.x, this.y + bob);
     const facingLeft = Math.cos(this.angle) < 0;

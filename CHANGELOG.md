@@ -57,3 +57,10 @@
 
 ## Day 4:
  ## plan: Fix frog and lily animation states and convert code base modularity to export JSON files of system states through websockets to Unreal engine to outsource the animations rendering.
+
+ ## Implementation:
+ *upgraded frog being dropped down from lily pads animations, by adding a splash animation for the frog as well.
+
+ ## Changes:
+ *outsourcing animations rendering to Unreal Engine is postponed.
+ *added a new depth field normalised from 0-1 and added a new pond flood background to visualize the depth gradient of the pond.
