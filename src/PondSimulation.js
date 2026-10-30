@@ -329,19 +329,6 @@ export function createPondSimulation(THREE, input) {
 
       const lmPoint = (lm, i) => ({ x: lm[i].x * window.innerWidth, y: lm[i].y * window.innerHeight });
 
-      let silt = [];
-      function spawnSilt(p) {
-        if (silt.length > 150) return;
-        silt.push({
-          x: p.x + (Math.random() - 0.5) * 12, y: p.y + (Math.random() - 0.5) * 12,
-          vx: (Math.random() - 0.5) * 14, vy: (Math.random() - 0.5) * 14,
-          r: 5 + Math.random() * 6, age: 0, life: 1.6 + Math.random() * 1.2
-        });
-      }
-      function updateSilt(dt) {
-        silt.forEach(s => { s.age += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.r += 14 * dt; });
-        silt = silt.filter(s => s.age < s.life);
-      }
 
       function updateHandVisuals(visitors, dt) {
         const activeIds = new Set();
@@ -389,12 +376,6 @@ export function createPondSimulation(THREE, input) {
               tips.slice(0, 2).forEach(t => emitRipple(t.x, t.y, 0.5 * feel.ripple));
             }
           }
-
-          // Shallow water: a moving hand scrapes the bottom and kicks up sand
-          if (v.dipped && v.moved && feel.depth < 0.4 &&
-              Math.random() < dt * 30 * (1 - feel.depth / 0.4)) {
-            spawnSilt(tips[Math.floor(Math.random() * tips.length)]);
-          }
         });
         for (const id of handVisualStates.keys()) {
           if (!activeIds.has(id)) handVisualStates.delete(id);
@@ -412,7 +393,6 @@ export function createPondSimulation(THREE, input) {
           }
         });
         droplets = droplets.filter(d => !d.landed);
-        updateSilt(dt);
       }
 
       function emitRipple(px, py, intensity = 1.0) {
@@ -1511,13 +1491,6 @@ export function createPondSimulation(THREE, input) {
         renderHandShadowsOnPondFloor(uwCtx, visitors);
         uwCtx.save();
         uwCtx.scale(dpr, dpr);
-        silt.forEach(s => {
-          const a = 0.22 * (1 - s.age / s.life);
-          uwCtx.fillStyle = `rgba(200, 180, 140, ${a})`;
-          uwCtx.beginPath();
-          uwCtx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-          uwCtx.fill();
-        });
         fishes.forEach(fish => {
           fish.update(dt);
           fish.draw(uwCtx);

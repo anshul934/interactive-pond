@@ -64,3 +64,7 @@
  ## Changes:
  *outsourcing animations rendering to Unreal Engine is postponed.
  *added a new depth field normalised from 0-1 and added a new pond flood background to visualize the depth gradient of the pond.
+ *improved water visuals to visualise difference between shallow and deeper areas of the pond.
+ *changed frogs from statically swimming to the lily pads and swimming away, to dynamically being disturbed by the water ripple waves like the lily pads.
+ *increased frog's swimming speed and leg movement animation
+ *removed silt function 

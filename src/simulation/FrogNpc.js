@@ -46,7 +46,7 @@ export class FrogNpc {
 
     this.bobPhase += dt * 4;
     if (this.state === "swimmingIn" || this.state === "swimmingOut" || this.state === "leaving") {
-      this.swimPhase += dt * 12;
+      this.swimPhase += dt * 18;
     }
 
     if (this.state === "waiting") {
@@ -72,7 +72,7 @@ export class FrogNpc {
           "perching"
         );
       } else {
-        this.moveTowards(dx, dy, 72 * wade, dt);
+        this.moveTowards(dx, dy, 108 * wade, dt);
       }
       return;
     }
@@ -126,7 +126,7 @@ export class FrogNpc {
       const dx = targetX - this.x;
       const dy = targetY - this.y;
       this.angle = Math.atan2(dy, dx);
-      this.moveTowards(dx, dy, 90 * wade, dt);
+      this.moveTowards(dx, dy, 135 * wade, dt);
 
       if ((this.exitSide < 0 && this.x < -35) || (this.exitSide > 0 && this.x > width + 35)) {
         this.state = "waiting";
@@ -135,8 +135,8 @@ export class FrogNpc {
     }
 
     if (this.state === "leaving") {
-      this.x += Math.cos(this.angle) * 90 * dt;
-      this.y += Math.sin(this.angle) * 90 * dt;
+      this.x += Math.cos(this.angle) * 135 * dt;
+      this.y += Math.sin(this.angle) * 135 * dt;
 
       if (
         this.x < -45 ||
