@@ -68,3 +68,18 @@
  *changed frogs from statically swimming to the lily pads and swimming away, to dynamically being disturbed by the water ripple waves like the lily pads.
  *increased frog's swimming speed and leg movement animation
  *removed silt function 
+
+## Day 5:
+ ## plan: Reserach multi camera input methods to read user's x and z coordinates on pond floor and make lily pads react dynamically to user's hands
+
+ ## Implementation:
+ *Introduced new lily pad creation logic with varied sizes and features, including bites, holes, spots, and flowers
+ *made lily pads be able to be pushed around by user's hands or pointer.
+ *added momentum and friction so pushed lily pads coast and settle in new locations.
+ *fast moving hands/pointer now startle frogs off their lily pads.
+ *flowers on lily pads open and close based on the theme chosen.
+ *Koi moving under lily pads move the lily pads too when brushed up against.
+
+ ## Changes:
+ *improved lily pads contact detection so pointer swipes and hands can push pads more reliably.
+ *improved pad collision spacing and koi contact detection.

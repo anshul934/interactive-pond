@@ -582,6 +582,11 @@ export function createPondSimulation(THREE, input) {
         emitSplashWave(cx, cy, vx, vy, (1.5 + 2.0 * splashLevel(velocity)) * feel.wake);
       }
 
+      if (touchingWater) {
+        touchLilyPads(visitor, vx, vy, velocity, dt);
+        spookFrogs(visitor, velocity);
+      }
+
       if (hasHandLandmarks && visitor.dipped && visitor.moved && speed > 1.5) {
         emitHandOutlineRipples(visitor, Math.min(speed * 0.08, 1.2) * feel.ripple);
       } else if (!hasHandLandmarks && visitor.moved && speed > 1.5) {
@@ -602,6 +607,7 @@ export function createPondSimulation(THREE, input) {
           emitRipple(px, py, 2.2 * feel.ripple);
           emitSplash([{ x: px, y: py }], 1800, 0, 0, 1.2 * feel.spray);
           playWaterSound('plop', 0.4);
+          bumpLilyPadsAt(px, py);
         } else if (config.interactionMode === 'food') {
           dropFoodPellet(px, py);
           playWaterSound('plop', 0.3);
@@ -745,14 +751,140 @@ export function createPondSimulation(THREE, input) {
         });
       }
 
+      const LILY_PALETTES = [
+        { center: '#6fae78', mid: '#3f7c52', edge: '#2a5c3b' }, // fresh
+        { center: '#4f865c', mid: '#347247', edge: '#245535' }, // classic
+        { center: '#86a463', mid: '#5d8244', edge: '#436337' }, // olive
+        { center: '#52978a', mid: '#367868', edge: '#255a4e' }  // teal
+      ];
+
+      function pickLilyRadius() {
+        const roll = Math.random();
+        if (roll < 0.2) return 16 + Math.random() * 11;   // small
+        if (roll < 0.7) return 34 + Math.random() * 16;   // medium
+        return 56 + Math.random() * 28;                   // large
+      }
+
+      function createLilyPad(position, radius) {
+        const small = radius < 30;
+        const large = radius >= 56;
+
+        // Shape: full round, thin slit, or wide notch
+        const shapeRoll = Math.random();
+        let notchHalf;
+        if (small) notchHalf = shapeRoll < 0.85 ? 0 : 0.05;
+        else if (shapeRoll < 0.35) notchHalf = 0;
+        else if (shapeRoll < 0.6) notchHalf = 0.04 + Math.random() * 0.05;
+        else notchHalf = 0.28 + Math.random() * 0.18;
+
+        const age = small ? Math.random() * 0.25 : Math.random() * (large ? 1 : 0.75);
+        const notchAngle = Math.random() * Math.PI * 2;
+
+        const bites = [];
+        if (age > 0.45) {
+          const n = Math.floor(Math.random() * 3);
+          for (let i = 0; i < n; i++) {
+            bites.push({
+              angle: Math.random() * Math.PI * 2,
+              depth: 0.06 + Math.random() * 0.07,
+              width: 0.12 + Math.random() * 0.1
+            });
+          }
+        }
+
+        let hole = null;
+        if (age > 0.6 && !small && Math.random() < 0.5) {
+          const a = Math.random() * Math.PI * 2;
+          const d = radius * (0.3 + Math.random() * 0.3);
+          hole = { x: Math.cos(a) * d, y: Math.sin(a) * d, r: radius * (0.04 + Math.random() * 0.04) };
+        }
+
+        const spots = [];
+        const spotCount = small ? 0 : Math.floor(Math.random() * 4);
+        for (let i = 0; i < spotCount; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const d = Math.random() * radius * 0.65;
+          spots.push({
+            x: Math.cos(a) * d, y: Math.sin(a) * d,
+            rx: radius * (0.08 + Math.random() * 0.12),
+            ry: radius * (0.05 + Math.random() * 0.08),
+            rot: Math.random() * Math.PI
+          });
+        }
+
+        let dew = null;
+        if (Math.random() < 0.45) {
+          const a = Math.random() * Math.PI * 2;
+          const d = Math.random() * radius * 0.55;
+          dew = { x: Math.cos(a) * d, y: Math.sin(a) * d, r: 1.6 + Math.random() * 1.6 };
+        }
+
+        let flower = null;
+        if (!small && Math.random() < (large ? 0.55 : 0.4)) {
+          const typeRoll = Math.random();
+          const a = notchAngle + Math.PI + (Math.random() - 0.5) * 1.2;
+          const d = radius * (0.18 + Math.random() * 0.28);
+          flower = {
+            type: typeRoll < 0.5 ? 'white' : typeRoll < 0.85 ? 'pink' : 'bud',
+            x: Math.cos(a) * d,
+            y: Math.sin(a) * d,
+            rot: Math.random() * Math.PI * 2,
+            phase: Math.random() * Math.PI * 2
+          };
+        }
+
+        return {
+          x: position.x,
+          y: position.y,
+          homeX: position.x,          // fixed anchor the pad floats around
+          homeY: position.y,
+          ox: 0, oy: 0,               // ripple-driven offset from home
+          vx: 0, vy: 0,               // offset velocity
+          rotOffset: 0, vRot: 0,      // ripple-driven spin
+          heave: 0,                   // smoothed wave height under the pad
+          load: 0, loadSmooth: 0,     // frog weight (0..1)
+          bounce: 0, bounceV: 0,      // landing/jump-off bob
+          tiltX: 0, tiltY: 0,         // highlight shift from motion
+          hvx: 0, hvy: 0,             // slide velocity of the pad's home (px/s)
+          spin: 0,                    // free spin velocity (rad/s)
+          lastTouch: -10,             // last time a hand/pointer touched it
+          lastBump: -10,              // last pad-vs-pad or koi bump
+          flowerOpen: 1,              // 0 = closed, 1 = fully open
+          phase: Math.random() * Math.PI * 2,
+          spinBias: (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5),
+          radius,
+          agility: Math.max(0.65, Math.min(1.7, 48 / radius)),   // small = lighter = livelier
+          rotation: Math.random() * Math.PI * 2,
+          notchAngle,
+          notchHalf,
+          squash: 0.9 + Math.random() * 0.1,
+          age,
+          bites,
+          hole,
+          spots,
+          dew,
+          flower,
+          hasFlower: Boolean(flower),
+          veinCount: 9 + Math.floor(Math.random() * 6),
+          edgeAmp: 0.012 + Math.random() * 0.016,
+          edgeFreqA: 3 + Math.floor(Math.random() * 3),
+          edgeFreqB: 7 + Math.floor(Math.random() * 4),
+          palette: LILY_PALETTES[small
+            ? (Math.random() < 0.5 ? 0 : 2)
+            : Math.floor(Math.random() * LILY_PALETTES.length)]
+        };
+      }
+
       function initLilyPads() {
         lilyPads = [];
-        const count = Math.min(7, Math.floor((window.innerWidth * window.innerHeight) / 110000));
+        const count = Math.min(10, Math.floor((window.innerWidth * window.innerHeight) / 90000));
         const minGap = 24;
         const maxAttemptsPerPad = 80;
 
-        for (let i = 0; i < count; i++) {
-          const radius = 38 + Math.random() * 26;
+        // Place big pads first so they pack better
+        const radii = Array.from({ length: count }, pickLilyRadius).sort((a, b) => b - a);
+
+        radii.forEach(radius => {
           let position = null;
 
           for (let attempt = 0; attempt < maxAttemptsPerPad; attempt++) {
@@ -760,35 +892,15 @@ export function createPondSimulation(THREE, input) {
             const marginY = Math.min(radius + minGap, window.innerHeight / 2);
             const x = marginX + Math.random() * (window.innerWidth - marginX * 2);
             const y = marginY + Math.random() * (window.innerHeight - marginY * 2);
-            const overlapsExistingPad = lilyPads.some(pad =>
-              Math.hypot(pad.x - x, pad.y - y) < pad.radius + radius + minGap
-            );
-
-            if (!overlapsExistingPad) {
-              position = { x, y };
-              break;
-            }
+            const overlaps = lilyPads.some(pad => {
+              const gap = (pad.radius < 30 || radius < 30) ? 10 : minGap;  // small pads may sit closer
+              return Math.hypot(pad.x - x, pad.y - y) < pad.radius + radius + gap;
+            });
+            if (!overlaps) { position = { x, y }; break; }
           }
 
-          if (!position) continue;
-
-          lilyPads.push({
-            x: position.x,
-            y: position.y,
-            homeX: position.x,          // fixed anchor the pad floats around
-            homeY: position.y,
-            ox: 0, oy: 0,               // ripple-driven offset from home
-            vx: 0, vy: 0,               // offset velocity
-            rotOffset: 0, vRot: 0,      // ripple-driven spin
-            heave: 0,                   // smoothed wave height under the pad
-            phase: Math.random() * Math.PI * 2,
-            spinBias: (Math.random() < 0.5 ? -1 : 1) * (0.5 + Math.random() * 0.5),
-            radius,
-            rotation: Math.random() * Math.PI * 2,
-            notchAngle: Math.random() * Math.PI * 2,
-            hasFlower: Math.random() > 0.5
-          });
-        }
+          if (position) lilyPads.push(createLilyPad(position, radius));
+        });
       }
 
       // ---- Lily pad floating physics (tweak these) ----
@@ -799,19 +911,145 @@ export function createPondSimulation(THREE, input) {
       const LILY_DAMPING = 2.6;          // lower = bouncier
       const LILY_MAX_DRIFT = 14;         // max px a ripple can move a pad from home
       const LILY_HEAVE_SCALE = 0.06;     // pad swells as a wave passes under it
+      // ---- Lily pad interaction tuning ----
+      const LILY_SLIDE_FRICTION = 2.4;   // how fast a shoved pad stops sliding (1/s)
+      const LILY_SPIN_FRICTION = 1.6;    // how fast a flicked pad stops spinning (1/s)
+      const LILY_MAX_SLIDE_SPEED = 260;  // top slide speed (px/s), scaled by pad agility
+      const LILY_TOUCH_ACCEL = 900;      // how hard a hand in the water shoves a pad (px/s²)
+
+      // Hand / pointer pushing pads around while it is in the water
+      function touchLilyPads(visitor, vx, vy, velocity, dt) {
+        if (!config.enableLilies || lilyPads.length === 0) return;
+        const nowSec = performance.now() / 1000;
+        const points = getVisitorFishSpots(visitor);
+        const speedFactor = Math.min(velocity / 2500, 1);
+        const moving = velocity > 25;
+
+        lilyPads.forEach(pad => {
+          let totalWeight = 0, cx = 0, cy = 0;
+          points.forEach(p => {
+            const distance = Math.hypot(p.x - pad.x, p.y - pad.y);
+            const reach = 20;
+            if (distance >= pad.radius + reach) return;
+            const weight = Math.min(1, (pad.radius + reach - distance) / reach);
+            totalWeight += weight;
+            cx += p.x * weight;
+            cy += p.y * weight;
+          });
+          if (!totalWeight) return;
+          cx /= totalWeight;
+          cy /= totalWeight;
+
+          // Moving hands shove along their motion; resting hands nudge outward
+          let dirX, dirY;
+          if (moving) {
+            dirX = vx / velocity; dirY = vy / velocity;
+          } else {
+            const d = Math.hypot(pad.x - cx, pad.y - cy) || 1;
+            dirX = (pad.x - cx) / d; dirY = (pad.y - cy) / d;
+          }
+          const power = moving ? 0.55 + speedFactor * 1.45 : 0.16;
+          const contact = Math.min(1, totalWeight / 2);
+          const accel = LILY_TOUCH_ACCEL * power * contact * pad.agility;
+          pad.hvx += dirX * accel * dt;
+          pad.hvy += dirY * accel * dt;
+
+          // Off-centre pushes twist the pad
+          const torque = ((cx - pad.x) * dirY - (cy - pad.y) * dirX) / pad.radius;
+          pad.spin += torque * power * 4 * dt * pad.agility;
+
+          // First contact: the pad dips, and a fast hand throws a little spray
+          if (nowSec - pad.lastTouch > 0.3) {
+            pad.bounceV -= 1.2 + speedFactor * 2;
+            if (moving && speedFactor > 0.25) {
+              emitSplash([{ x: cx, y: cy }], velocity, vx, vy, 0.6);
+            }
+          }
+          pad.lastTouch = nowSec;
+        });
+      }
+
+      // Click / pinch on a pad: it bobs, scoots away from the touch and twirls
+      function bumpLilyPadsAt(px, py) {
+        if (!config.enableLilies) return;
+        lilyPads.forEach(pad => {
+          const dx = pad.x - px, dy = pad.y - py;
+          const d = Math.hypot(dx, dy);
+          if (d > pad.radius * 0.95) return;
+          const nx = d > 1 ? dx / d : 0;
+          const ny = d > 1 ? dy / d : 0;
+          pad.bounceV -= 3.0;
+          pad.hvx += nx * 110 * pad.agility;
+          pad.hvy += ny * 110 * pad.agility;
+          pad.spin += pad.spinBias * 1.6 * pad.agility;
+        });
+      }
+
+      // A fast hand near a perched frog scares it off the pad, away from the hand
+      function spookFrogs(visitor, velocity) {
+        if (velocity < 600) return;
+        frogs.forEach(frog => {
+          if (frog.state !== 'perching') return;
+          if (Math.hypot(frog.x - visitor.x, frog.y - visitor.y) > 120) return;
+          frog.exitSide = visitor.x < frog.x ? 1 : -1;
+          frog.waitTimer = 0;
+        });
+      }
+
+      // Pads that drift into each other bump apart (lighter pad moves more)
+      function resolveLilyPadCollisions(nowSec) {
+        for (let i = 0; i < lilyPads.length; i++) {
+          for (let j = i + 1; j < lilyPads.length; j++) {
+            const a = lilyPads[i], b = lilyPads[j];
+            const dx = b.x - a.x, dy = b.y - a.y;
+            const dist = Math.hypot(dx, dy) || 0.001;
+            const minDist = a.radius + b.radius + 3;
+            if (dist >= minDist) continue;
+
+            const nx = dx / dist, ny = dy / dist;
+            const overlap = minDist - dist;
+            const ma = a.radius * a.radius, mb = b.radius * b.radius;
+            const wa = mb / (ma + mb), wb = ma / (ma + mb);
+
+            a.homeX -= nx * overlap * wa;
+            a.homeY -= ny * overlap * wa;
+            b.homeX += nx * overlap * wb;
+            b.homeY += ny * overlap * wb;
+
+            const rel = (b.hvx - a.hvx) * nx + (b.hvy - a.hvy) * ny;
+            if (rel < 0) {
+              const j2 = -1.4 * rel;
+              a.hvx -= nx * j2 * wa; a.hvy -= ny * j2 * wa;
+              b.hvx += nx * j2 * wb; b.hvy += ny * j2 * wb;
+
+              if (-rel > 25 && nowSec - Math.max(a.lastBump, b.lastBump) > 0.6) {
+                a.lastBump = b.lastBump = nowSec;
+                a.bounceV -= 0.8; b.bounceV -= 0.8;
+                a.spin -= 0.5 * wa; b.spin += 0.5 * wb;
+                emitRipple((a.x + b.x) / 2, (a.y + b.y) / 2, 0.25);
+              }
+            }
+          }
+        }
+      }
 
       function updateLilyPads(dt) {
         if (!config.enableLilies || lilyPads.length === 0) return;
 
         const step = Math.min(dt, 0.05);
-        const t = performance.now() / 1000;
+        const nowSec = performance.now() / 1000;
+        const t = nowSec;
         const W = window.innerWidth;
         const H = window.innerHeight;
         const aspect = W / H;
         const ringWidthSq = 0.025 * 0.025; // same ring width as the water shader
+        const flow = 0.35 + config.flowSpeed * 0.65;
+        // Lilies close up at night and half-close at twilight
+        const flowerTarget = config.theme === 'night' ? 0.05 : config.theme === 'twilight' ? 0.6 : 1;
+
+        resolveLilyPadCollisions(nowSec);
 
         lilyPads.forEach(pad => {
-          // Pad centre in the same space the ripples use (see emitRipple)
           const px = (pad.x / W - 0.5) * aspect;
           const py = 0.5 - pad.y / H;
           const boundaryUv = (pad.radius * LILY_INFLUENCE_SCALE) / H;
@@ -828,32 +1066,80 @@ export function createPondSimulation(THREE, input) {
             const gap = Math.abs(dist - waveRadius);
             const damp = r.intensity * Math.exp(-r.age * (1.9 - 0.8 * r.depth)) * Math.exp(-dist * 2.4);
 
-            // Any part of the ring inside the pad's boundary pushes the pad
             const reach = Math.max(0, gap - boundaryUv);
             const push = damp * Math.exp((-2 * reach * reach) / ringWidthSq);
             if (push > 0.002 && dist > 1e-4) {
-              ax += (dx / dist) * push * LILY_PUSH;     // away from the ripple
-              ay += (-dy / dist) * push * LILY_PUSH;    // screen y is flipped
+              ax += (dx / dist) * push * LILY_PUSH;
+              ay += (-dy / dist) * push * LILY_PUSH;
               torque += push * pad.spinBias * LILY_SPIN;
             }
 
-            // Actual wave height at the pad centre (same formula as the shader)
             wave += Math.sin((dist - waveRadius) * 45) * damp *
               Math.exp((-2 * gap * gap) / ringWidthSq);
           }
 
-          // Spring + damper back to home
-          pad.vx += (ax - LILY_SPRING * pad.ox - LILY_DAMPING * pad.vx) * step;
-          pad.vy += (ay - LILY_SPRING * pad.oy - LILY_DAMPING * pad.vy) * step;
+          // Koi brushing past underneath nudge the pad along their heading
+          fishes.forEach(fish => {
+            const d = Math.hypot(fish.x - pad.x, fish.y - pad.y);
+            if (d > pad.radius + fish.length * 0.4) return;
+            const fishSpeed = fish.speed * 60; // px/frame -> px/s
+            if (fishSpeed < 50) return;
+            const hx = Math.cos(fish.angle), hy = Math.sin(fish.angle);
+            const nx = (pad.x - fish.x) / (d || 1), ny = (pad.y - fish.y) / (d || 1);
+            const k = Math.min(fishSpeed / 180, 1.5) * 70 * pad.agility;
+            pad.hvx += (hx * 0.7 + nx * 0.3) * k * step;
+            pad.hvy += (hy * 0.7 + ny * 0.3) * k * step;
+            pad.spin += (((fish.x - pad.x) * hy - (fish.y - pad.y) * hx) / pad.radius) * 0.5 * step * pad.agility;
+            if (nowSec - (pad.lastFishBump ?? -10) > 1.5) {
+              pad.lastFishBump = nowSec;
+              pad.bounceV -= 0.9;
+              emitRipple(fish.x, fish.y, 0.22);
+            }
+          });
+
+          // Small pads are light and lively, big pads are sluggish
+          ax *= pad.agility;
+          ay *= pad.agility;
+          torque *= pad.agility;
+          const damping = LILY_DAMPING * (1.15 - 0.25 * pad.agility);
+          const maxDrift = LILY_MAX_DRIFT * pad.agility;
+
+          pad.vx += (ax - LILY_SPRING * pad.ox - damping * pad.vx) * step;
+          pad.vy += (ay - LILY_SPRING * pad.oy - damping * pad.vy) * step;
           pad.ox += pad.vx * step;
           pad.oy += pad.vy * step;
 
           const drift = Math.hypot(pad.ox, pad.oy);
-          if (drift > LILY_MAX_DRIFT) {
-            const k = LILY_MAX_DRIFT / drift;
+          if (drift > maxDrift) {
+            const k = maxDrift / drift;
             pad.ox *= k;
             pad.oy *= k;
           }
+
+          // Shoved pads actually slide: the home point itself moves, then coasts to a stop
+          const slideCap = LILY_MAX_SLIDE_SPEED * pad.agility;
+          const slideSpeed = Math.hypot(pad.hvx, pad.hvy);
+          if (slideSpeed > slideCap) {
+            pad.hvx *= slideCap / slideSpeed;
+            pad.hvy *= slideCap / slideSpeed;
+          }
+          pad.homeX += pad.hvx * step;
+          pad.homeY += pad.hvy * step;
+          const friction = Math.exp(-LILY_SLIDE_FRICTION * step);
+          pad.hvx *= friction;
+          pad.hvy *= friction;
+
+          // Soft walls: pads bounce gently off the screen edges
+          const mx = Math.min(pad.radius * 0.6, W / 2);
+          const my = Math.min(pad.radius * 0.6, H / 2);
+          if (pad.homeX < mx) { pad.homeX = mx; pad.hvx = Math.abs(pad.hvx) * 0.4; }
+          else if (pad.homeX > W - mx) { pad.homeX = W - mx; pad.hvx = -Math.abs(pad.hvx) * 0.4; }
+          if (pad.homeY < my) { pad.homeY = my; pad.hvy = Math.abs(pad.hvy) * 0.4; }
+          else if (pad.homeY > H - my) { pad.homeY = H - my; pad.hvy = -Math.abs(pad.hvy) * 0.4; }
+
+          // Free spin from flicks, on top of the ripple-driven wobble
+          pad.spin *= Math.exp(-LILY_SPIN_FRICTION * step);
+          pad.rotation += pad.spin * step;
 
           pad.vRot += (torque - 9 * pad.rotOffset - 3 * pad.vRot) * step;
           pad.rotOffset = Math.max(-0.35, Math.min(0.35, pad.rotOffset + pad.vRot * step));
@@ -861,16 +1147,259 @@ export function createPondSimulation(THREE, input) {
           const targetHeave = Math.max(-1, Math.min(1, wave));
           pad.heave += (targetHeave - pad.heave) * Math.min(1, step * 14);
 
-          // Idle floating: slow, slightly irregular bob so it never looks pinned
-          const idleX = Math.sin(t * 0.55 + pad.phase) * 2.2 +
-                        Math.sin(t * 0.23 + pad.phase * 1.7) * 1.5;
-          const idleY = Math.cos(t * 0.47 + pad.phase * 1.3) * 2.0 +
-                        Math.sin(t * 0.29 + pad.phase * 0.6) * 1.2;
-          pad.idleRot = Math.sin(t * 0.31 + pad.phase) * 0.035;
+          // Frog weight: pad settles lower while a frog sits on it
+          pad.loadSmooth += (pad.load - pad.loadSmooth) * Math.min(1, step * 6);
+          pad.load = 0; // the frog loop sets it again each frame
+
+          // Landing / jump-off bob (damped spring)
+          pad.bounceV += (-60 * pad.bounce - 5 * pad.bounceV) * step;
+          pad.bounce += pad.bounceV * step;
+
+          // Highlight shifts as the pad tilts with its motion (including slides)
+          const tx = Math.max(-0.3, Math.min(0.3, (pad.vx + pad.hvx) / 90));
+          const ty = Math.max(-0.3, Math.min(0.3, (pad.vy + pad.hvy) / 90));
+          pad.tiltX += (tx - pad.tiltX) * Math.min(1, step * 5);
+          pad.tiltY += (ty - pad.tiltY) * Math.min(1, step * 5);
+
+          // Flowers open and close with the time of day
+          pad.flowerOpen += (flowerTarget - pad.flowerOpen) * Math.min(1, step * 0.8);
+
+          // Idle floating plus a slow wander with the current
+          const idleX = (Math.sin(t * 0.55 + pad.phase) * 2.2 +
+                         Math.sin(t * 0.23 + pad.phase * 1.7) * 1.5) * pad.agility +
+                        Math.sin(t * 0.11 + pad.phase * 2.3) * 5 * flow * pad.agility;
+          const idleY = (Math.cos(t * 0.47 + pad.phase * 1.3) * 2.0 +
+                         Math.sin(t * 0.29 + pad.phase * 0.6) * 1.2) * pad.agility +
+                        Math.cos(t * 0.09 + pad.phase * 1.9) * 4 * flow * pad.agility;
+          pad.idleRot = Math.sin(t * 0.31 + pad.phase) * 0.035 * pad.agility;
+          pad.rotation += pad.spinBias * 0.015 * pad.agility * step;   // very slow turn
 
           pad.x = pad.homeX + pad.ox + idleX;
           pad.y = pad.homeY + pad.oy + idleY;
         });
+      }
+
+      function lilyEdgeRadius(pad, a, t) {
+        let k = 1 +
+          pad.edgeAmp * Math.sin(a * pad.edgeFreqA + pad.phase + t * 0.5) +
+          pad.edgeAmp * 0.6 * Math.sin(a * pad.edgeFreqB - pad.phase * 1.3 - t * 0.4) +
+          Math.abs(pad.heave) * 0.012 * Math.sin(a * 5 + t * 2.2);
+        for (const bite of pad.bites) {
+          const d = Math.atan2(Math.sin(a - bite.angle), Math.cos(a - bite.angle));
+          k -= bite.depth * Math.exp(-(d * d) / (bite.width * bite.width));
+        }
+        return pad.radius * k;
+      }
+
+      function traceLilyPath(pad, t) {
+        const path = new Path2D();
+        const half = pad.notchHalf;
+        const start = pad.notchAngle + half;
+        const end = pad.notchAngle + Math.PI * 2 - half;
+        const steps = Math.max(28, Math.round(pad.radius * 0.8));
+
+        if (half > 0) path.moveTo(0, 0);
+        for (let i = 0; i <= steps; i++) {
+          const a = start + (end - start) * (i / steps);
+          const r = lilyEdgeRadius(pad, a, t);
+          const x = Math.cos(a) * r;
+          const y = Math.sin(a) * r * pad.squash;
+          if (i === 0 && half === 0) path.moveTo(x, y);
+          else path.lineTo(x, y);
+        }
+        path.closePath();
+
+        if (pad.hole) {
+          path.moveTo(pad.hole.x + pad.hole.r, pad.hole.y);
+          path.arc(pad.hole.x, pad.hole.y, pad.hole.r, 0, Math.PI * 2);
+        }
+        return path;
+      }
+
+      function drawLilyFlower(ctx, pad, t) {
+        const f = pad.flower;
+        if (!f) return;
+        const open = pad.flowerOpen ?? 1;
+        const u = Math.max(6, Math.min(15, pad.radius * 0.18)) *
+          (1 + 0.025 * Math.sin(t * 0.8 + f.phase));
+        const colors = f.type === 'pink'
+          ? { outer: '#f0a3c0', inner: '#fad2e1' }
+          : { outer: '#f1f6ee', inner: '#ffffff' };
+
+        ctx.save();
+        ctx.translate(f.x, f.y);
+        ctx.rotate(f.rot);
+
+        ctx.fillStyle = 'rgba(2, 12, 18, 0.18)';
+        ctx.beginPath();
+        ctx.ellipse(1.5, 2.5, u * 1.5, u * 1.3, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (f.type === 'bud' || open < 0.12) {
+          ctx.fillStyle = '#3b7a4b';
+          [-1, 1].forEach(s => {
+            ctx.beginPath();
+            ctx.ellipse(s * u * 0.3, 0, u * 0.3, u * 0.85, s * 0.35, 0, Math.PI * 2);
+            ctx.fill();
+          });
+          ctx.fillStyle = f.type === 'white' ? '#f4f8f1' : '#f6c4d5';
+          ctx.beginPath();
+          ctx.ellipse(0, -u * 0.1, u * 0.38, u * 0.95, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+          ctx.beginPath();
+          ctx.ellipse(-u * 0.1, -u * 0.3, u * 0.12, u * 0.4, 0, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // Petals spread and lengthen as the flower opens
+          const size = 0.4 + 0.6 * open;
+          const spread = 0.25 + 0.75 * open;
+          ctx.strokeStyle = 'rgba(60, 40, 60, 0.12)';
+          ctx.lineWidth = 0.6;
+          ctx.fillStyle = colors.outer;
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.ellipse(Math.cos(a) * u * 0.8 * spread, Math.sin(a) * u * 0.8 * spread,
+              u * 1.05 * size, u * 0.4 * (0.7 + 0.3 * open), a, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+          ctx.fillStyle = colors.inner;
+          for (let i = 0; i < 6; i++) {
+            const a = ((i + 0.5) / 6) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.ellipse(Math.cos(a) * u * 0.5 * spread, Math.sin(a) * u * 0.5 * spread,
+              u * 0.78 * size, u * 0.32, a, 0, Math.PI * 2);
+            ctx.fill();
+          }
+          if (open > 0.35) {
+            ctx.fillStyle = '#f6b81a';
+            ctx.beginPath();
+            ctx.arc(0, 0, u * 0.42 * (0.6 + 0.4 * open), 0, Math.PI * 2);
+            ctx.fill();
+          }
+          if (open > 0.6) {
+            ctx.fillStyle = '#d98a0a';
+            for (let i = 0; i < 8; i++) {
+              const a = (i / 8) * Math.PI * 2;
+              ctx.beginPath();
+              ctx.arc(Math.cos(a) * u * 0.25, Math.sin(a) * u * 0.25, u * 0.07, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
+        ctx.restore();
+      }
+
+      function drawLilyPad(ctx, pad, t) {
+        const R = pad.radius;
+        const rot = pad.rotation + pad.rotOffset + (pad.idleRot ?? 0);
+        const scale = 1 + pad.heave * LILY_HEAVE_SCALE + pad.bounce * 0.09 - pad.loadSmooth * 0.035;
+        const sink = pad.loadSmooth;
+        const path = traceLilyPath(pad, t);
+        const rule = pad.hole ? 'evenodd' : 'nonzero';
+
+        ctx.save();
+        ctx.translate(pad.x, pad.y);
+        ctx.rotate(rot);
+        ctx.scale(scale, scale);
+
+        // Water meniscus ring around the pad
+        const lap = Math.max(0, 0.06 + 0.035 * Math.sin(t * 1.3 + pad.phase) + sink * 0.05);
+        const lapScale = 1.07 + 0.015 * Math.sin(t * 0.9 + pad.phase);
+        ctx.strokeStyle = `rgba(200, 240, 245, ${lap.toFixed(3)})`;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, R * lapScale, R * pad.squash * lapScale, 0, 0, Math.PI * 2);
+        ctx.stroke();
+
+        // Light offset in the pad's own rotated space (light comes from top-left)
+        const cosR = Math.cos(-rot), sinR = Math.sin(-rot);
+        const lx = -0.30 + pad.tiltX, ly = -0.34 + pad.tiltY;
+        const hx = (lx * cosR - ly * sinR) * R * 0.55;
+        const hy = (lx * sinR + ly * cosR) * R * 0.55;
+
+        const grad = ctx.createRadialGradient(hx * 0.4, hy * 0.4, R * 0.04, 0, 0, R * 1.02);
+        grad.addColorStop(0, pad.palette.center);
+        grad.addColorStop(0.72, pad.palette.mid);
+        grad.addColorStop(1, pad.palette.edge);
+
+        // Body with soft shadow (shadow tightens as the pad sinks under a frog)
+        ctx.shadowColor = 'rgba(2, 12, 18, 0.35)';
+        ctx.shadowBlur = (9 - 3 * sink) * dpr;
+        ctx.shadowOffsetX = (3 - 1.2 * sink) * dpr;
+        ctx.shadowOffsetY = (4 - 1.6 * sink) * dpr;
+        ctx.fillStyle = grad;
+        ctx.fill(path, rule);
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+
+        // Surface detail, clipped to the pad
+        ctx.save();
+        ctx.clip(path, rule);
+
+        ctx.fillStyle = 'rgba(18, 48, 28, 0.14)';
+        pad.spots.forEach(s => {
+          ctx.beginPath();
+          ctx.ellipse(s.x, s.y, s.rx, s.ry, s.rot, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        ctx.strokeStyle = 'rgba(18, 52, 30, 0.2)';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        const veinSpan = Math.PI * 2 - pad.notchHalf * 2;
+        for (let i = 0; i < pad.veinCount; i++) {
+          const a = pad.notchAngle + pad.notchHalf + veinSpan * ((i + 0.5) / pad.veinCount);
+          ctx.moveTo(Math.cos(a) * R * 0.06, Math.sin(a) * R * 0.06 * pad.squash);
+          ctx.lineTo(Math.cos(a) * R * 0.9, Math.sin(a) * R * 0.9 * pad.squash);
+        }
+        ctx.stroke();
+
+        // Center dimple
+        ctx.fillStyle = 'rgba(20, 60, 35, 0.22)';
+        ctx.beginPath();
+        ctx.arc(0, 0, R * 0.07, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Moving sheen
+        const gloss = ctx.createRadialGradient(hx, hy, 0, hx, hy, R * 0.75);
+        gloss.addColorStop(0, 'rgba(255, 255, 230, 0.16)');
+        gloss.addColorStop(1, 'rgba(255, 255, 230, 0)');
+        ctx.fillStyle = gloss;
+        ctx.fillRect(-R * 1.2, -R * 1.2, R * 2.4, R * 2.4);
+
+        // Older pads: brown stain creeping in from the edge
+        if (pad.age > 0.35) {
+          ctx.strokeStyle = `rgba(122, 98, 42, ${(pad.age * 0.4).toFixed(3)})`;
+          ctx.lineWidth = R * 0.16 * pad.age + 1;
+          ctx.stroke(path);
+        }
+        ctx.restore();
+
+        // Thin wet rim
+        ctx.strokeStyle = 'rgba(200, 245, 255, 0.16)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke(path);
+
+        // Dewdrop
+        if (pad.dew) {
+          const d = pad.dew;
+          ctx.fillStyle = 'rgba(230, 248, 255, 0.5)';
+          ctx.beginPath();
+          ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.beginPath();
+          ctx.arc(d.x - d.r * 0.3, d.y - d.r * 0.3, d.r * 0.35, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        drawLilyFlower(ctx, pad, t);
+        ctx.restore();
       }
 
       // Net push of all ripples/waves at a screen point, as a direction-weighted
@@ -1337,6 +1866,7 @@ export function createPondSimulation(THREE, input) {
           pad.x = pad.homeX;
           pad.y = pad.homeY;
           pad.ox = pad.oy = pad.vx = pad.vy = 0;
+          pad.hvx = pad.hvy = pad.spin = 0;
         });
 
         pebbles.forEach(pebble => {
@@ -1516,75 +2046,35 @@ export function createPondSimulation(THREE, input) {
       function renderForegroundScene(dt, visitors = []) {
         const width = window.innerWidth;
         const height = window.innerHeight;
+        const t = performance.now() / 1000;
         foregroundCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
         foregroundCtx.clearRect(0, 0, width, height);
 
         if (config.enableLilies) {
-          lilyPads.forEach(pad => {
-            const scale = 1 + pad.heave * LILY_HEAVE_SCALE;
-
-            foregroundCtx.save();
-            foregroundCtx.translate(pad.x, pad.y);
-            foregroundCtx.rotate(pad.rotation + pad.rotOffset + (pad.idleRot ?? 0));
-            foregroundCtx.scale(scale, scale);
-
-            const padGrad = foregroundCtx.createRadialGradient(0, 0, 4, 0, 0, pad.radius);
-            padGrad.addColorStop(0, '#4f865c');
-            padGrad.addColorStop(0.85, '#347247');
-            padGrad.addColorStop(1, '#245535');
-
-            // Soft shadow on the water under the pad
-            foregroundCtx.shadowColor = 'rgba(2, 12, 18, 0.35)';
-            foregroundCtx.shadowBlur = 9 * dpr;
-            foregroundCtx.shadowOffsetX = 3 * dpr;
-            foregroundCtx.shadowOffsetY = 4 * dpr;
-
-            foregroundCtx.fillStyle = padGrad;
-            foregroundCtx.beginPath();
-            foregroundCtx.arc(0, 0, pad.radius, pad.notchAngle + 0.25, pad.notchAngle + Math.PI * 1.85);
-            foregroundCtx.lineTo(0, 0);
-            foregroundCtx.closePath();
-            foregroundCtx.fill();
-
-            // Thin wet rim where the pad meets the water
-            foregroundCtx.shadowColor = 'transparent';
-            foregroundCtx.shadowBlur = 0;
-            foregroundCtx.shadowOffsetX = 0;
-            foregroundCtx.shadowOffsetY = 0;
-            foregroundCtx.strokeStyle = 'rgba(200, 245, 255, 0.16)';
-            foregroundCtx.lineWidth = 1.2;
-            foregroundCtx.stroke();
-
-            if (pad.hasFlower) {
-              foregroundCtx.fillStyle = '#ffffff';
-              for (let petal = 0; petal < 8; petal++) {
-                const angle = (petal / 8) * Math.PI * 2;
-                foregroundCtx.beginPath();
-                foregroundCtx.ellipse(
-                  Math.cos(angle) * 8,
-                  Math.sin(angle) * 8,
-                  10,
-                  4,
-                  angle,
-                  0,
-                  Math.PI * 2
-                );
-                foregroundCtx.fill();
-              }
-              foregroundCtx.fillStyle = '#ffb703';
-              foregroundCtx.beginPath();
-              foregroundCtx.arc(0, 0, 5, 0, Math.PI * 2);
-              foregroundCtx.fill();
-            }
-
-            foregroundCtx.restore();
-          });
-        }
+          lilyPads.forEach(pad => drawLilyPad(foregroundCtx, pad, t));
 
           frogs.forEach(frog => {
+          const prevState = frog.state;
           const push = getWaterPush(frog.x, frog.y);
           frog.applyWaterPush(push.ax, push.ay, dt);
           frog.update(dt, width, height, lilyPads, config.enableLilies, waterDepthAt);
+
+          // The pad reacts to the frog's weight, landing and jump-off
+          const pad = frog.targetPad;
+          if (pad) {
+            if (frog.state === 'perching') pad.load = 1;
+            if (prevState === 'hoppingToPad' && frog.state === 'perching') {
+              pad.bounceV -= 3.2;
+              pad.vx += Math.cos(frog.angle) * 35;
+              pad.vy += Math.sin(frog.angle) * 35;
+            }
+            if (prevState === 'perching' && frog.state === 'hoppingToWater') {
+              pad.bounceV -= 2.2;
+              pad.vx -= Math.cos(frog.angle) * 45;
+              pad.vy -= Math.sin(frog.angle) * 45;
+            }
+          }
+
           frog.consumeWaterRippleEvents().forEach(ripple => {
             emitRipple(ripple.x, ripple.y, ripple.intensity ?? 0.18);
           });
@@ -1593,7 +2083,7 @@ export function createPondSimulation(THREE, input) {
             playWaterSound('splash', 0.3);
           });
           frog.draw(foregroundCtx);
-        });
+        });}
 
         // water droplets flung off the hand
         droplets.forEach(d => {
@@ -1678,38 +2168,32 @@ export function createPondSimulation(THREE, input) {
       let lastTime = performance.now();
 
       function animate() {
-        const now = performance.now();
-        const dt = Math.min(0.1, (now - lastTime) / 1000);
-        lastTime = now;
+        requestAnimationFrame(animate);   // moved to the top so one bad frame can't kill the loop
 
-        const inputState = input.update();
-        const visitorInputs = inputState.visitors ?? [];
-        updateVisitorIdleDetection(visitorInputs, dt);
-        assignVisitorTargets();
-        visitorInputs.forEach(visitor => {
-          handleVisitorMove(visitor, dt);
-          if (visitor.action) handlePointerAction(visitor.x, visitor.y);
-        });
-        updateHandVisuals(visitorInputs, dt);
-        updateRipples(dt);
-        updateLilyPads(dt);
-        renderUnderwaterScene(dt, visitorInputs);
-        renderForegroundScene(dt, visitorInputs);
+        try {
+          const now = performance.now();
+          const dt = Math.min(0.1, (now - lastTime) / 1000);
+          lastTime = now;
 
-        // // 1. Update interactive wave state
-        // updateRipples(dt);
+          const inputState = input.update();
+          const visitorInputs = inputState.visitors ?? [];
+          updateVisitorIdleDetection(visitorInputs, dt);
+          assignVisitorTargets();
+          visitorInputs.forEach(visitor => {
+            handleVisitorMove(visitor, dt);
+            if (visitor.action) handlePointerAction(visitor.x, visitor.y);
+          });
+          updateHandVisuals(visitorInputs, dt);
+          updateRipples(dt);
+          updateLilyPads(dt);
+          renderUnderwaterScene(dt, visitorInputs);
+          renderForegroundScene(dt, visitorInputs);
 
-        // // 2. Render Underwater canvas texture scene
-        // renderUnderwaterScene(dt, visitorInputs);
-        // renderForegroundScene(dt);
-
-        // 3. Update WebGL Water Shader Uniforms
-        waterUniforms.uTime.value += dt;
-
-        // 4. Render main screen WebGL shader mesh
-        renderer.render(scene, camera);
-
-        requestAnimationFrame(animate);
+          waterUniforms.uTime.value += dt;
+          renderer.render(scene, camera);
+        } catch (error) {
+          console.error('[pond] frame error:', error);
+        }
       }
 
       // --------------------------------------------------------------------

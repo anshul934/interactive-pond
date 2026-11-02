@@ -21,6 +21,9 @@ actions, and stationary-hand interactions are processed independently for
 each hand. Nearby koi approach stationary hands after all available food has
 been eaten.
 Pointer and touch input remain available without enabling the camera.
+Moving a pointer or dipped hand across a lily pad nudges it and gives it
+momentum; pads separate when they collide, and koi can brush them as they swim
+underneath. A quick nearby movement can also startle a perched frog.
 Keep the terminal open while using the simulation and press `Ctrl+C` to stop
 the server. To use a different port, set `PORT` before starting it, for example
 `$env:PORT = 8001; node .\serve.mjs`.

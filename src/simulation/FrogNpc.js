@@ -150,13 +150,15 @@ export class FrogNpc {
     }
   }
 
-  enter(width, height, lilyPads) {
+    enter(width, height, lilyPads) {
     this.exitSide = Math.random() < 0.5 ? -1 : 1;
     this.x = this.exitSide < 0 ? -32 : width + 32;
     this.y = height * (0.25 + Math.random() * 0.5);
-    this.targetPad = lilyPads[Math.floor(Math.random() * lilyPads.length)];
+    const roomy = lilyPads.filter(pad => pad.radius >= 34);
+    const pool = roomy.length ? roomy : lilyPads;
+    this.targetPad = pool[Math.floor(Math.random() * pool.length)];
     this.state = "swimmingIn";
-  }
+    }
 
   disableLilyPads() {
     if (this.state === "perching" && this.targetPad) {
