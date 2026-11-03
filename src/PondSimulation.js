@@ -987,7 +987,7 @@ export function createPondSimulation(THREE, input) {
 
       // A fast hand near a perched frog scares it off the pad, away from the hand
       function spookFrogs(visitor, velocity) {
-        if (velocity < 600) return;
+        if (velocity < 1200) return;
         frogs.forEach(frog => {
           if (frog.state !== 'perching') return;
           if (Math.hypot(frog.x - visitor.x, frog.y - visitor.y) > 120) return;
@@ -2052,8 +2052,9 @@ export function createPondSimulation(THREE, input) {
 
         if (config.enableLilies) {
           lilyPads.forEach(pad => drawLilyPad(foregroundCtx, pad, t));
+        }
 
-          frogs.forEach(frog => {
+        frogs.forEach(frog => {
           const prevState = frog.state;
           const push = getWaterPush(frog.x, frog.y);
           frog.applyWaterPush(push.ax, push.ay, dt);
@@ -2083,7 +2084,7 @@ export function createPondSimulation(THREE, input) {
             playWaterSound('splash', 0.3);
           });
           frog.draw(foregroundCtx);
-        });}
+        });
 
         // water droplets flung off the hand
         droplets.forEach(d => {

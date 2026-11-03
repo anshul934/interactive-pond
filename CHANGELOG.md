@@ -83,3 +83,5 @@
  ## Changes:
  *improved lily pads contact detection so pointer swipes and hands can push pads more reliably.
  *improved pad collision spacing and koi contact detection.
+ *Found and fixed a bug where the frogs disappeared when the lily pads were toggled off.
+ *Increased frogs' spook tolerance.
